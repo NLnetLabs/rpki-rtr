@@ -1,0 +1,19 @@
+[package]
+name = "rpki-rtr"
+version = "0.1.0"
+edition = "2018"
+authors = ["The NLnet Labs RPKI Team <rpki-team@nlnetlabs.nl>"]
+description = "A library for RPKI RTR."
+documentation = "https://docs.rs/rpki/"
+homepage = "https://github.com/nlnetlabs/rpki-rtr/"
+repository = "https://github.com/NLnetLabs/rpki-rtr"
+keywords = ["rpki", "routing-security"]
+categories = ["network-programming"]
+license = "BSD-3-Clause"
+
+[dependencies]
+futures   = "0.3.1"
+log 	  = "0.4.8"
+pin-utils = "0.1.0-alpha.4"
+slab      = "^0.4"
+
