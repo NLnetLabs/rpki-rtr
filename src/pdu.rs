@@ -9,10 +9,10 @@
 use std::{io, mem, slice};
 use std::marker::Unpin;
 use std::net::{Ipv4Addr, Ipv6Addr};
-use futures::io::{
+use tokio::io::{
     AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt
 };
-//use crate::origins::AddressOrigin;
+use crate::payload;
 use super::serial::Serial;
 
 
@@ -324,71 +324,68 @@ impl Ipv6Prefix {
 common!(Ipv6Prefix);
 
 
-/*
-//------------ Prefix --------------------------------------------------------
+//------------ Payload -------------------------------------------------------
 
-pub enum Prefix {
+pub enum Payload {
     V4(Ipv4Prefix),
     V6(Ipv6Prefix),
 }
 
-impl Prefix {
-    pub fn new(version: u8, flags: u8, origin: &AddressOrigin) -> Self {
-        let prefix = origin.prefix();
-        match prefix.address() {
-            IpAddr::V4(addr) => {
-                Prefix::V4(
+impl Payload {
+    pub fn new(version: u8, flags: u8, payload: payload::Payload) -> Self {
+        match payload {
+            payload::Payload::V4(prefix) => {
+                Payload::V4(
                     Ipv4Prefix::new(
                         version,
                         flags,
-                        prefix.address_length(),
-                        origin.max_length(),
-                        addr,
-                        origin.as_id().into()
+                        prefix.prefix_len,
+                        prefix.max_len,
+                        prefix.prefix,
+                        prefix.asn
                     )
                 )
             }
-            IpAddr::V6(addr) => {
-                Prefix::V6(
+            payload::Payload::V6(prefix) => {
+                Payload::V6(
                     Ipv6Prefix::new(
                         version,
                         flags,
-                        prefix.address_length(),
-                        origin.max_length(),
-                        addr,
-                        origin.as_id().into()
+                        prefix.prefix_len,
+                        prefix.max_len,
+                        prefix.prefix,
+                        prefix.asn
                     )
                 )
             }
         }
     }
 
-    pub fn write<A: AsyncWrite>(
-        self,
-        a: A
-    ) -> WriteAll<A, Self> {
-        write_all(a, self)
+    pub async fn write<A: AsyncWrite + Unpin>(
+        &self,
+        a: &mut A
+    ) -> Result<(), io::Error> {
+        a.write_all(self.as_ref()).await
     }
 }
 
-impl AsRef<[u8]> for Prefix {
+impl AsRef<[u8]> for Payload {
     fn as_ref(&self) -> &[u8] {
         match *self {
-            Prefix::V4(ref prefix) => prefix.as_ref(),
-            Prefix::V6(ref prefix) => prefix.as_ref(),
+            Payload::V4(ref prefix) => prefix.as_ref(),
+            Payload::V6(ref prefix) => prefix.as_ref(),
         }
     }
 }
 
-impl AsMut<[u8]> for Prefix {
+impl AsMut<[u8]> for Payload {
     fn as_mut(&mut self) -> &mut [u8] {
         match *self {
-            Prefix::V4(ref mut prefix) => prefix.as_mut(),
-            Prefix::V6(ref mut prefix) => prefix.as_mut(),
+            Payload::V4(ref mut prefix) => prefix.as_mut(),
+            Payload::V6(ref mut prefix) => prefix.as_mut(),
         }
     }
 }
-*/
 
 
 //------------ EndOfData -----------------------------------------------------
@@ -583,8 +580,8 @@ pub struct Error<P: Sized, T: Sized> {
 
 impl<P, T> Error<P, T> 
 where
-    P: Sized + 'static + Send,
-    T: Sized + 'static + Send
+    P: Sized + 'static + Send + Sync,
+    T: Sized + 'static + Send + Sync,
 {
     pub fn new(
         version: u8,
@@ -651,7 +648,7 @@ impl<P: Sized, T: Sized> AsMut<[u8]> for Error<P, T> {
 
 //------------ BoxedError ----------------------------------------------------
 
-pub struct BoxedError(Box<dyn AsRef<[u8]> + Send>);
+pub struct BoxedError(Box<dyn AsRef<[u8]> + Sync + Send>);
 
 impl BoxedError {
     pub async fn write<A: AsyncWrite + Unpin>(
