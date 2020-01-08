@@ -27,7 +27,7 @@ pub trait VrpStore: Clone + Sync + Send + 'static {
     fn diff(
         &self, session: u16, serial: Serial
     ) -> Option<(u16, Serial, Self::DiffIter)>;
-    fn timing(&self) -> Timing;
+    fn timing(&self) -> pdu::Timing;
 }
 
 
@@ -317,16 +317,6 @@ pub enum Query {
     Reset,
     Error(pdu::BoxedError),
     Notify
-}
-
-
-//------------ Timing --------------------------------------------------------
-
-#[derive(Clone, Copy, Debug)]
-pub struct Timing {
-    pub refresh: u32,
-    pub retry: u32,
-    pub expire: u32
 }
 
 

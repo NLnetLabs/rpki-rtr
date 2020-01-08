@@ -9,6 +9,7 @@
 //! This function also returns the sending end of a channel that can be used
 //! to inform the server that an update of the RPKI data is available.
 
+pub mod client;
 pub mod payload;
 pub mod pdu;
 pub mod serial;

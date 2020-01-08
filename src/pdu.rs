@@ -22,14 +22,6 @@ macro_rules! common {
     ( $type:ident ) => {
         #[allow(dead_code)]
         impl $type {
-            pub async fn read<'a, A: AsyncRead + Unpin>(
-                a: &mut A
-            ) -> Result<Self, io::Error> {
-                let res = Self::default();
-                a.read_exact(&mut Self::default().as_mut()).await?;
-                Ok(res)
-            }
-
             pub async fn write<A: AsyncWrite + Unpin>(
                 &self,
                 a: &mut A
@@ -62,6 +54,101 @@ macro_rules! common {
     }
 }
 
+macro_rules! concrete {
+    ( $type:ident ) => {
+        common!($type);
+
+        #[allow(dead_code)]
+        impl $type {
+            pub fn version(&self) -> u8 {
+                self.header.version()
+            }
+
+            pub fn session(&self) -> u16 {
+                self.header.session()
+            }
+
+            pub async fn read<Sock: AsyncRead + Unpin>(
+                sock: &mut Sock 
+            ) -> Result<Self, io::Error> {
+                let mut res = Self::default();
+                sock.read_exact(res.header.as_mut()).await?;
+                if res.header.pdu() != Self::PDU {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        concat!(
+                            "PDU type mismatch when expecting ",
+                            stringify!($type)
+                        )
+                    ))
+                }
+                if res.header.length() as usize != res.as_ref().len() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        concat!(
+                            "invalid length for ",
+                            stringify!($type)
+                        )
+                    ))
+                }
+                sock.read_exact(&mut res.as_mut()[Header::LEN..]).await?;
+                Ok(res)
+            }
+
+            pub async fn try_read<Sock: AsyncRead + Unpin>(
+                sock: &mut Sock 
+            ) -> Result<Result<Self, Header>, io::Error> {
+                let mut res = Self::default();
+                sock.read_exact(res.header.as_mut()).await?;
+                if res.header.pdu() == ERROR_PDU {
+                    // Since we should drop the session after an error, we
+                    // can safely ignore all the rest of the error for now.
+                    return Ok(Err(res.header))
+                }
+                if res.header.pdu() != Self::PDU {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        concat!(
+                            "PDU type mismatch when expecting ",
+                            stringify!($type)
+                        )
+                    ))
+                }
+                if res.header.length() as usize != res.as_ref().len() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        concat!(
+                            "invalid length for ",
+                            stringify!($type)
+                        )
+                    ))
+                }
+                sock.read_exact(&mut res.as_mut()[Header::LEN..]).await?;
+                Ok(Ok(res))
+            }
+
+            pub async fn read_payload<Sock: AsyncRead + Unpin>(
+                header: Header, sock: &mut Sock
+            ) -> Result<Self, io::Error> {
+                if header.length() as usize != mem::size_of::<Self>() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        concat!(
+                            "invalid length for ",
+                            stringify!($type),
+                            " PDU"
+                        )
+                    ))
+                }
+                let mut res = Self::default();
+                sock.read_exact(&mut res.as_mut()[Header::LEN..]).await?;
+                res.header = header;
+                Ok(res)
+            }
+        }
+    }
+}
+
 
 //------------ SerialQuery ---------------------------------------------------
 
@@ -85,7 +172,7 @@ impl SerialNotify {
     }
 }
 
-common!(SerialNotify);
+concrete!(SerialNotify);
 
 
 //------------ SerialQuery ---------------------------------------------------
@@ -112,21 +199,12 @@ impl SerialQuery {
             payload: SerialQueryPayload::new(serial),
         }
     }
-
-    pub fn version(&self) -> u8 {
-        self.header.version
-    }
-
-    pub fn session(&self) -> u16 {
-        u16::from_be(self.header.session)
-    }
-
     pub fn serial(&self) -> Serial {
         self.payload.serial()
     }
 }
 
-common!(SerialQuery);
+concrete!(SerialQuery);
 
 
 //------------ SerialQueryPayload --------------------------------------------
@@ -142,6 +220,14 @@ impl SerialQueryPayload {
         SerialQueryPayload {
             serial: serial.to_be()
         }
+    }
+
+    pub async fn read<Sock: AsyncRead + Unpin>(
+        sock: &mut Sock 
+    ) -> Result<Self, io::Error> {
+        let mut res = Self::default();
+        sock.read_exact(res.as_mut()).await?;
+        Ok(res)
     }
 
     pub fn serial(&self) -> Serial {
@@ -173,7 +259,7 @@ impl ResetQuery {
     }
 }
 
-common!(ResetQuery);
+concrete!(ResetQuery);
 
 
 //------------ CacheResponse -------------------------------------------------
@@ -186,6 +272,8 @@ pub struct CacheResponse {
 }
 
 impl CacheResponse {
+    pub const PDU: u8 = 3;
+
     pub fn new(version: u8, session: u16) -> Self {
         CacheResponse {
             header: Header::new(version, 3, session, 8)
@@ -193,7 +281,7 @@ impl CacheResponse {
     }
 }
 
-common!(CacheResponse);
+concrete!(CacheResponse);
 
 
 //------------ Ipv4Prefix ----------------------------------------------------
@@ -213,6 +301,8 @@ pub struct Ipv4Prefix {
 
 #[allow(dead_code)]
 impl Ipv4Prefix {
+    pub const PDU: u8 = 4;
+
     pub fn new(
         version: u8,
         flags: u8,
@@ -222,7 +312,7 @@ impl Ipv4Prefix {
         asn: u32
     ) -> Self {
         Ipv4Prefix {
-            header: Header::new(version, 4, 0, 20),
+            header: Header::new(version, Self::PDU, 0, 20),
             flags,
             prefix_len,
             max_len,
@@ -230,10 +320,6 @@ impl Ipv4Prefix {
             prefix: u32::from(prefix).to_be(),
             asn: asn.to_be()
         }
-    }
-
-    pub fn version(&self) -> u8 {
-        self.header.version
     }
 
     pub fn flags(&self) -> u8 {
@@ -257,7 +343,7 @@ impl Ipv4Prefix {
     }
 }
 
-common!(Ipv4Prefix);
+concrete!(Ipv4Prefix);
 
 
 //------------ Ipv6Prefix ----------------------------------------------------
@@ -277,6 +363,8 @@ pub struct Ipv6Prefix {
 
 #[allow(dead_code)] 
 impl Ipv6Prefix {
+    pub const PDU: u8 = 6;
+
     pub fn new(
         version: u8,
         flags: u8,
@@ -286,7 +374,7 @@ impl Ipv6Prefix {
         asn: u32
     ) -> Self {
         Ipv6Prefix {
-            header: Header::new(version, 6, 0, 32),
+            header: Header::new(version, Self::PDU, 0, 32),
             flags,
             prefix_len,
             max_len,
@@ -294,10 +382,6 @@ impl Ipv6Prefix {
             prefix: u128::from(prefix).to_be(),
             asn: asn.to_be()
         }
-    }
-
-    pub fn version(&self) -> u8 {
-        self.header.version
     }
 
     pub fn flags(&self) -> u8 {
@@ -321,7 +405,7 @@ impl Ipv6Prefix {
     }
 }
 
-common!(Ipv6Prefix);
+concrete!(Ipv6Prefix);
 
 
 //------------ Payload -------------------------------------------------------
@@ -361,11 +445,77 @@ impl Payload {
         }
     }
 
+    pub async fn read<Sock: AsyncRead + Unpin>(
+        sock: &mut Sock
+    ) -> Result<Result<Self, EndOfData>, io::Error> {
+        let header = Header::read(sock).await?;
+        match header.pdu {
+            Ipv4Prefix::PDU => {
+                Ipv4Prefix::read_payload(header, sock).await.map(|res| {
+                    Ok(Payload::V4(res))
+                })
+            }
+            Ipv6Prefix::PDU => {
+                Ipv6Prefix::read_payload(header, sock).await.map(|res| {
+                    Ok(Payload::V6(res))
+                })
+            }
+            // XXX Ignore RouterKey
+            EndOfData::PDU => {
+                EndOfData::read_payload(header, sock).await.map(Err)
+            }
+            _ => {
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "unexpected PDU in payload sequence"
+                ))
+            }
+        }
+    }
+
+    pub fn version(&self) -> u8 {
+        match *self {
+            Payload::V4(ref data) => data.version(),
+            Payload::V6(ref data) => data.version(),
+        }
+    }
+
+    pub fn flags(&self) -> u8 {
+        match *self {
+            Payload::V4(ref data) => data.flags(),
+            Payload::V6(ref data) => data.flags(),
+        }
+    }
+
     pub async fn write<A: AsyncWrite + Unpin>(
         &self,
         a: &mut A
     ) -> Result<(), io::Error> {
         a.write_all(self.as_ref()).await
+    }
+
+    pub fn into_payload(self) -> (payload::Action, payload::Payload) {
+        (
+            payload::Action::from_flags(self.flags()),
+            match self {
+                Payload::V4(data) => {
+                    payload::Payload::V4(payload::Ipv4Prefix {
+                        prefix: data.prefix(),
+                        prefix_len: data.prefix_len(),
+                        max_len: data.max_len(),
+                        asn: data.asn(),
+                    })
+                }
+                Payload::V6(data) => {
+                    payload::Payload::V6(payload::Ipv6Prefix {
+                        prefix: data.prefix(),
+                        prefix_len: data.prefix_len(),
+                        max_len: data.max_len(),
+                        asn: data.asn(),
+                    })
+                }
+            }
+        )
     }
 }
 
@@ -401,6 +551,8 @@ pub enum EndOfData {
 }
 
 impl EndOfData {
+    pub const PDU: u8 = 7;
+
     pub fn new(
         version: u8,
         session: u16,
@@ -416,6 +568,61 @@ impl EndOfData {
             EndOfData::V1(EndOfDataV1::new(
                 version, session, serial, refresh, retry, expire
             ))
+        }
+    }
+
+    pub async fn read_payload<Sock: AsyncRead + Unpin>(
+        header: Header, sock: &mut Sock
+    ) -> Result<Self, io::Error> {
+        match header.version() {
+            0 => {
+                EndOfDataV0::read_payload(header, sock)
+                    .await.map(EndOfData::V0)
+            }
+            1 => {
+                EndOfDataV1::read_payload(header, sock)
+                    .await.map(EndOfData::V1)
+            }
+            _ => {
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "invalid version in end of data PDU"
+                ))
+            }
+        }
+    }
+
+    pub fn version(&self) -> u8 {
+        match *self {
+            EndOfData::V0(_) => 0,
+            EndOfData::V1(_) => 1,
+        }
+    }
+
+    pub fn session(&self) -> u16 {
+        match *self {
+            EndOfData::V0(ref data) => data.session(),
+            EndOfData::V1(ref data) => data.session(),
+        }
+    }
+
+    pub fn serial(&self) -> Serial {
+        match *self {
+            EndOfData::V0(ref data) => data.serial(),
+            EndOfData::V1(ref data) => data.serial(),
+        }
+    }
+
+    pub fn timing(&self) -> Option<Timing> {
+        match *self {
+            EndOfData::V0(_) => None,
+            EndOfData::V1(ref data) => {
+                Some(Timing {
+                    refresh: data.refresh(),
+                    retry: data.retry(),
+                    expire: data.expire()
+                })
+            }
         }
     }
 
@@ -457,19 +664,13 @@ pub struct EndOfDataV0 {
 
 #[allow(dead_code)]
 impl EndOfDataV0 {
+    pub const PDU: u8 = 7;
+
     pub fn new(session: u16, serial: Serial) -> Self {
         EndOfDataV0 {
-            header: Header::new(0, 7, session, 12),
+            header: Header::new(0, Self::PDU, session, 12),
             serial: serial.to_be()
         }
-    }
-
-    pub fn version(&self) -> u8 {
-        self.header.version
-    }
-
-    pub fn session(&self) -> u16 {
-        u16::from_be(self.header.session)
     }
 
     pub fn serial(&self) -> Serial {
@@ -477,7 +678,7 @@ impl EndOfDataV0 {
     }
 }
 
-common!(EndOfDataV0);
+concrete!(EndOfDataV0);
     
 
 //------------ EndOfDataV1 ---------------------------------------------------
@@ -495,6 +696,8 @@ pub struct EndOfDataV1 {
 
 #[allow(dead_code)] 
 impl EndOfDataV1 {
+    pub const PDU: u8 = 7;
+
     pub fn new(
         version: u8,
         session: u16,
@@ -504,20 +707,12 @@ impl EndOfDataV1 {
         expire: u32
     ) -> Self {
         EndOfDataV1 {
-            header: Header::new(version, 7, session, 24),
+            header: Header::new(version, Self::PDU, session, 24),
             serial: serial.to_be(),
             refresh: refresh.to_be(),
             retry: retry.to_be(),
             expire: expire.to_be(),
         }
-    }
-
-    pub fn version(&self) -> u8 {
-        self.header.version
-    }
-
-    pub fn session(&self) -> u16 {
-        u16::from_be(self.header.session)
     }
 
     pub fn serial(&self) -> Serial {
@@ -537,7 +732,7 @@ impl EndOfDataV1 {
     }
 }
 
-common!(EndOfDataV1);
+concrete!(EndOfDataV1);
 
 
 //------------ CacheReset ----------------------------------------------------
@@ -551,18 +746,16 @@ pub struct CacheReset {
 
 #[allow(dead_code)] 
 impl CacheReset {
+    pub const PDU: u8 = 7;
+
     pub fn new(version: u8) -> Self {
         CacheReset {
-            header: Header::new(version, 8, 0, 8)
+            header: Header::new(version, Self::PDU, 0, 8)
         }
-    }
-
-    pub fn version(&self) -> u8 {
-        self.header.version
     }
 }
 
-common!(CacheReset);
+concrete!(CacheReset);
 
 
 //------------ Error ---------------------------------------------------------
@@ -578,11 +771,16 @@ pub struct Error<P: Sized, T: Sized> {
     text: T
 }
 
+pub const ERROR_PDU: u8 = 10;
+
+
 impl<P, T> Error<P, T> 
 where
     P: Sized + 'static + Send + Sync,
     T: Sized + 'static + Send + Sync,
 {
+    pub const PDU: u8 = ERROR_PDU;
+
     pub fn new(
         version: u8,
         error_code: u16,
@@ -677,6 +875,8 @@ pub struct Header {
 }
 
 impl Header {
+    pub const LEN: usize = mem::size_of::<Self>();
+
     pub fn new(version: u8, pdu: u8, session: u16, length: u32) -> Self {
         Header {
             version,
@@ -684,6 +884,14 @@ impl Header {
             session: session.to_be(),
             length: length.to_be(),
         }
+    }
+
+    pub async fn read<Sock: AsyncRead + Unpin>(
+        sock: &mut Sock 
+    ) -> Result<Self, io::Error> {
+        let mut res = Self::default();
+        sock.read_exact(res.as_mut()).await?;
+        Ok(res)
     }
 
     pub fn version(self) -> u8 {
@@ -704,4 +912,24 @@ impl Header {
 }
 
 common!(Header);
+
+
+//------------ Timing --------------------------------------------------------
+
+#[derive(Clone, Copy, Debug)]
+pub struct Timing {
+    pub refresh: u32,
+    pub retry: u32,
+    pub expire: u32
+}
+
+impl Default for Timing {
+    fn default() -> Self {
+        Timing {
+            refresh: 3600,
+            retry: 600,
+            expire: 7200
+        }
+    }
+}
 

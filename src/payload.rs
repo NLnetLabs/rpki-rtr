@@ -6,6 +6,7 @@
 
 use std::net::{Ipv4Addr, Ipv6Addr};
 
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Ipv4Prefix {
     pub prefix: Ipv4Addr,
@@ -36,6 +37,15 @@ pub enum Action {
 }
 
 impl Action {
+    pub fn from_flags(flags: u8) -> Self {
+        if flags & 1 == 1 {
+            Action::Announce
+        }
+        else {
+            Action::Withdraw
+        }
+    }
+
     pub fn into_flags(self) -> u8 {
         match self {
             Action::Announce => 1,
