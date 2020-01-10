@@ -1,6 +1,5 @@
 use std::io;
 use std::marker::Unpin;
-use log::debug;
 use futures::future::Future;
 use tokio::time::{Duration, timeout};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -66,33 +65,48 @@ where
         loop {
             match self.state {
                 Some((session, serial)) => {
-                    self.serial(session, serial).await?;
+                    if !self.serial(session, serial).await? {
+                        // Do it again! Do it again!
+                        continue
+                    }
                 }
                 None => {
                     self.reset().await?;
                 }
             }
+
+            match timeout(
+                Duration::from_secs(u64::from(self.timing.refresh)),
+                pdu::SerialNotify::read(&mut self.sock)
+            ).await {
+                Ok(Err(err)) => return Err(err),
+                _ => { }
+            }
         }
     }
 
+    /// Perform a serial query.
+    ///
+    /// Returns `Ok(true)` if the query succeeded and the client should now
+    /// wait for a while. Returns `Ok(false)` if the server reported a
+    /// restart and we need to proceed with a reset query. Returns an error in
+    /// any other case.
     async fn serial(
         &mut self, session: u16, serial: Serial
-    ) -> Result<(), io::Error> {
+    ) -> Result<bool, io::Error> {
         pdu::SerialQuery::new(
             self.version.unwrap_or(1), session, serial
         ).write(&mut self.sock).await?;
-        let start = match self.try_io(|sock| {
-            pdu::CacheResponse::try_read(sock)
-        }).await? {
-            Ok(start) => start,
-            Err(err) => {
-                debug!("Got error {} from server", err.session());
-                return Err(io::Error::new(
-                    io::ErrorKind::Other, "server reported error"
-                ))
+        let start = match self.try_io(FirstReply::read).await? {
+            FirstReply::Response(start) => start,
+            FirstReply::Reset(_) => {
+                self.state = None;
+                return Ok(false)
             }
         };
         self.check_version(start.version())?;
+
+        println!("Start serial update.");
 
         self.store.start(false);
         loop {
@@ -112,7 +126,8 @@ where
                 }
             }
         }
-        Ok(())
+        self.store.done();
+        Ok(true)
     }
 
     async fn reset(&mut self) -> Result<(), io::Error> {
@@ -120,42 +135,9 @@ where
             self.version.unwrap_or(1)
         ).write(&mut self.sock).await?;
         let start = self.try_io(|sock| {
-            pdu::CacheResponse::try_read(sock)
+            pdu::CacheResponse::read(sock)
         }).await?;
-        let start = match start {
-            Ok(start) => start,
-            Err(err) => {
-                // If we get an Unsupported Version error and haven’t
-                // negotiated a version yet, we fall back to version 0 try
-                // reset again.
-                if err.session() == 4 && self.version.is_none() {
-                    self.version = Some(0);
-                    // We can’t recurse without boxing. 
-                    pdu::ResetQuery::new(
-                        self.version.unwrap_or(1)
-                    ).write(&mut self.sock).await?;
-                    match self.try_io(|sock| {
-                        pdu::CacheResponse::try_read(sock)
-                    }).await? {
-                        Ok(start) => start,
-                        Err(err) => {
-                            debug!("Got error {} from server", err.session());
-                            return Err(io::Error::new(
-                                io::ErrorKind::Other, "server reported error"
-                            ))
-                        }
-                    }
-                }
-                else {
-                    debug!("Got error {} from server", err.session());
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other, "server reported error"
-                    ))
-                }
-            }
-        };
         self.check_version(start.version())?;
-
         self.store.start(true);
         loop {
             match pdu::Payload::read(&mut self.sock).await? {
@@ -174,6 +156,7 @@ where
                 }
             }
         }
+        self.store.done();
         Ok(())
     }
 }
@@ -211,6 +194,46 @@ impl<Sock, Store> Client<Sock, Store> {
         else {
             self.version = Some(version);
             Ok(())
+        }
+    }
+}
+
+
+//------------ FirstReply ----------------------------------------------------
+
+enum FirstReply {
+    Response(pdu::CacheResponse),
+    Reset(pdu::CacheReset),
+}
+
+impl FirstReply {
+    async fn read<Sock: AsyncRead + Unpin>(
+        sock: &mut Sock
+    ) -> Result<Self, io::Error> {
+        let header = pdu::Header::read(sock).await?;
+        match header.pdu() {
+            pdu::CacheResponse::PDU => {
+                pdu::CacheResponse::read_payload(
+                    header, sock
+                ).await.map(FirstReply::Response)
+            }
+            pdu::CacheReset::PDU => {
+                pdu::CacheReset::read_payload(
+                    header, sock
+                ).await.map(FirstReply::Reset)
+            }
+            pdu::ERROR_PDU => {
+                Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("server reported error {}", header.session())
+                ))
+            }
+            pdu => {
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("unexpected PDU {}", pdu)
+                ))
+            }
         }
     }
 }
