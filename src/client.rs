@@ -11,9 +11,14 @@ use crate::serial::Serial;
 //------------ VrpStore ------------------------------------------------------
 
 pub trait VrpStore {
-    fn start(&mut self, reset: bool);
+    type Input: VrpInput;
+
+    fn start(&mut self, reset: bool) -> Self::Input;
+}
+
+pub trait VrpInput {
     fn push(&mut self, action: Action, payload: Payload);
-    fn done(&mut self);
+    fn done(self);
 }
 
 
@@ -108,13 +113,13 @@ where
 
         println!("Start serial update.");
 
-        self.store.start(false);
+        let mut target = self.store.start(false);
         loop {
             match pdu::Payload::read(&mut self.sock).await? {
                 Ok(payload) => {
                     self.check_version(payload.version())?;
                     let (action, payload) = payload.into_payload();
-                    self.store.push(action, payload);
+                    target.push(action, payload);
                 }
                 Err(end) => {
                     self.check_version(end.version())?;
@@ -126,7 +131,7 @@ where
                 }
             }
         }
-        self.store.done();
+        target.done();
         Ok(true)
     }
 
@@ -138,13 +143,13 @@ where
             pdu::CacheResponse::read(sock)
         }).await?;
         self.check_version(start.version())?;
-        self.store.start(true);
+        let mut target = self.store.start(true);
         loop {
             match pdu::Payload::read(&mut self.sock).await? {
                 Ok(payload) => {
                     self.check_version(payload.version())?;
                     let (action, payload) = payload.into_payload();
-                    self.store.push(action, payload);
+                    target.push(action, payload);
                 }
                 Err(end) => {
                     self.check_version(end.version())?;
@@ -156,7 +161,7 @@ where
                 }
             }
         }
-        self.store.done();
+        target.done();
         Ok(())
     }
 }
