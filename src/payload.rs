@@ -37,6 +37,20 @@ pub enum Action {
 }
 
 impl Action {
+    pub fn is_announce(self) -> bool {
+        match self {
+            Action::Announce => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_withdraw(self) -> bool {
+        match self {
+            Action::Withdraw=> true,
+            _ => false,
+        }
+    }
+
     pub fn from_flags(flags: u8) -> Self {
         if flags & 1 == 1 {
             Action::Announce
