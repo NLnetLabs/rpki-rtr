@@ -51,7 +51,7 @@ impl<Listener, Store> Server<Listener, Store> {
     pub async fn run<Sock>(mut self) -> Result<(), io::Error>
     where
         Listener:
-            Stream<Item = Result<Sock, io::Error>> + Unpin + Send + 'static,
+            Stream<Item = Result<Sock, io::Error>> + Unpin,
         Sock: AsyncRead + AsyncWrite + Unpin + Sync + Send + 'static,
         Store: VrpStore,
     {
