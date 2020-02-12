@@ -421,7 +421,7 @@ pub struct DispatchRunner {
 
 impl DispatchRunner {
     pub fn new() -> Self {
-        let (tx, rx) = channel(0);
+        let (tx, rx) = channel(1);
         let dispatch = Dispatch(Arc::new(Mutex::new(
             DispatchInner {
                 connections: Slab::new(),
