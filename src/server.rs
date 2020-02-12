@@ -388,7 +388,7 @@ impl Dispatch {
     }
 
     pub fn get_receiver(&mut self) -> NotifyReceiver {
-        let (tx, rx) = channel(0);
+        let (tx, rx) = channel(1);
         let mut inner = self.0.lock().unwrap();
         NotifyReceiver {
             rx: Some(rx),
