@@ -18,7 +18,7 @@ pub trait VrpStore {
 
 pub trait VrpInput {
     fn push(&mut self, action: Action, payload: Payload);
-    fn done(self, timing: pdu::Timing);
+    fn done(self, timing: pdu::Timing) -> Result<(), io::Error>;
 }
 
 
@@ -131,7 +131,7 @@ where
                 }
             }
         }
-        target.done(self.timing);
+        target.done(self.timing)?;
         Ok(true)
     }
 
@@ -161,7 +161,7 @@ where
                 }
             }
         }
-        target.done(self.timing);
+        target.done(self.timing)?;
         Ok(())
     }
 }
