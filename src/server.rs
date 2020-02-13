@@ -22,6 +22,7 @@ pub trait VrpStore: Clone + Sync + Send + 'static {
     type FullIter: Iterator<Item = Payload> + Sync + Send + 'static;
     type DiffIter: Iterator<Item = (Action, Payload)>  + Sync + Send + 'static;
 
+    fn ready(&self) -> bool;
     fn notify(&self) -> (u16, Serial);
     fn full(&self) -> (u16, Serial, Self::FullIter);
     fn diff(
@@ -253,8 +254,15 @@ where
     async fn serial(
         &mut self, session: u16, serial: Serial
     ) -> Result<(), io::Error> {
+        debug!("RTR server: request for serial {}", serial);
+        if !self.store.ready() {
+            return pdu::Error::new(
+                self.version(), 2, (), *b"Running initial validation"
+            ).write(&mut self.sock).await;
+        }
         match self.store.diff(session, serial) {
             Some((session, serial, diff)) => {
+                debug!("RTR server: store has a diff");
                 pdu::CacheResponse::new(
                     self.version(), session
                 ).write(&mut self.sock).await?;
@@ -270,12 +278,18 @@ where
                 ).write(&mut self.sock).await
             }
             None => {
+                debug!("RTR server: store ain't got no diff for that.");
                 pdu::CacheReset::new(self.version()).write(&mut self.sock).await
             }
         }
     }
 
     async fn reset(&mut self) -> Result<(), io::Error> {
+        if !self.store.ready() {
+            return pdu::Error::new(
+                self.version(), 2, (), *b"Running initial validation"
+            ).write(&mut self.sock).await;
+        }
         let (session, serial, iter) = self.store.full();
         pdu::CacheResponse::new(
             self.version(), session
