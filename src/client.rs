@@ -1,3 +1,17 @@
+//! RTR client.
+//!
+//! This module implements a generic RTR client through [`Client`]. In order
+//! to use the client, you will need to provide a type that implements
+//! [`VrpTarget`] as well as one that implements [`VrpUpdate`]. The former
+//! represents the place where all the information received via the RTR client
+//! is stored, while the latter receives a set of updates and applies it to
+//! the target.
+//!
+//! For more information on how to use the client, see the [`Client`] type.
+//!
+//! [`Client`]: struct.Client.html
+//! [`VrpTarget`]: trait VrpTarget.html
+//! [`VrpUpdate`]: trait.VrpUpdate.html
 use std::io;
 use std::marker::Unpin;
 use futures::future::Future;
@@ -11,12 +25,12 @@ use crate::serial::Serial;
 //------------ VrpTarget -----------------------------------------------------
 
 pub trait VrpTarget {
-    type Input: VrpInput;
+    type Input: VrpUpdate;
 
     fn start(&mut self, reset: bool) -> Self::Input;
 }
 
-pub trait VrpInput {
+pub trait VrpUpdate {
     fn push(&mut self, action: Action, payload: Payload);
     fn done(self, timing: pdu::Timing) -> Result<(), io::Error>;
 }
