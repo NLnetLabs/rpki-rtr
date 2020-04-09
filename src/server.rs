@@ -16,9 +16,9 @@ use crate::pdu;
 use crate::serial::Serial;
 
 
-//------------ VrpStore ------------------------------------------------------
+//------------ VrpSource -----------------------------------------------------
 
-pub trait VrpStore: Clone + Sync + Send + 'static {
+pub trait VrpSource: Clone + Sync + Send + 'static {
     type FullIter: Iterator<Item = Payload> + Sync + Send + 'static;
     type DiffIter: Iterator<Item = (Action, Payload)>  + Sync + Send + 'static;
 
@@ -34,15 +34,15 @@ pub trait VrpStore: Clone + Sync + Send + 'static {
 
 //------------ Server --------------------------------------------------------
 
-pub struct Server<Listener, Store> {
+pub struct Server<Listener, Source> {
     listener: Listener,
     dispatch: Dispatch,
-    store: Store,
+    store: Source,
 }
 
-impl<Listener, Store> Server<Listener, Store> {
+impl<Listener, Source> Server<Listener, Source> {
     pub fn new(
-        listener: Listener, dispatch: Dispatch, store: Store
+        listener: Listener, dispatch: Dispatch, store: Source
     ) -> Self {
         Server { 
             listener, dispatch, store
@@ -54,7 +54,7 @@ impl<Listener, Store> Server<Listener, Store> {
         Listener:
             Stream<Item = Result<Sock, io::Error>> + Unpin,
         Sock: AsyncRead + AsyncWrite + Unpin + Sync + Send + 'static,
-        Store: VrpStore,
+        Source: VrpSource,
     {
         while let Some(sock) = self.listener.next().await {
             let _ = spawn(
@@ -70,15 +70,15 @@ impl<Listener, Store> Server<Listener, Store> {
 
 //------------ Connection ----------------------------------------------------
 
-struct Connection<Sock, Store> {
+struct Connection<Sock, Source> {
     sock: Sock,
     notify: NotifyReceiver,
-    store: Store,
+    store: Source,
     version: Option<u8>,
 }
 
-impl<Sock, Store> Connection<Sock, Store> {
-    fn new(sock: Sock, notify: NotifyReceiver, store: Store) -> Self {
+impl<Sock, Source> Connection<Sock, Source> {
+    fn new(sock: Sock, notify: NotifyReceiver, store: Source) -> Self {
         Connection {
             sock, notify, store,
             version: None,
@@ -95,10 +95,10 @@ impl<Sock, Store> Connection<Sock, Store> {
 
 /// # High-level operation
 ///
-impl<Sock, Store> Connection<Sock, Store>
+impl<Sock, Source> Connection<Sock, Source>
 where
     Sock: AsyncRead + AsyncWrite + Unpin + Sync + Send + 'static,
-    Store: VrpStore
+    Source: VrpSource
 {
     async fn run(mut self) -> Result<(), io::Error> {
         while let Some(query) = self.recv().await? {
@@ -124,7 +124,7 @@ where
 
 /// # Receiving
 ///
-impl<Sock, Store> Connection<Sock, Store>
+impl<Sock, Source> Connection<Sock, Source>
 where Sock: AsyncRead + Unpin {
     async fn recv(&mut self) -> Result<Option<Query>, io::Error> {
         let header = {
@@ -246,10 +246,10 @@ where Sock: AsyncRead + Unpin {
 
 /// # Sending
 ///
-impl<Sock, Store> Connection<Sock, Store>
+impl<Sock, Source> Connection<Sock, Source>
 where
     Sock: AsyncWrite + Unpin + Sync + Send + 'static,
-    Store: VrpStore
+    Source: VrpSource
 {
     async fn serial(
         &mut self, session: u16, serial: Serial
@@ -279,7 +279,9 @@ where
             }
             None => {
                 debug!("RTR server: store ain't got no diff for that.");
-                pdu::CacheReset::new(self.version()).write(&mut self.sock).await
+                pdu::CacheReset::new(self.version()).write(
+                    &mut self.sock
+                ).await
             }
         }
     }

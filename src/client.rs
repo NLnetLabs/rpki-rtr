@@ -8,9 +8,9 @@ use crate::pdu;
 use crate::serial::Serial;
 
 
-//------------ VrpStore ------------------------------------------------------
+//------------ VrpTarget -----------------------------------------------------
 
-pub trait VrpStore {
+pub trait VrpTarget {
     type Input: VrpInput;
 
     fn start(&mut self, reset: bool) -> Self::Input;
@@ -24,18 +24,18 @@ pub trait VrpInput {
 
 //------------ Client --------------------------------------------------------
 
-pub struct Client<Sock, Store> {
+pub struct Client<Sock, Target> {
     sock: Sock,
-    store: Store,
+    store: Target,
     state: Option<(u16, Serial)>,
     version: Option<u8>,
     timing: pdu::Timing,
 }
 
-impl<Sock, Store> Client<Sock, Store> {
+impl<Sock, Target> Client<Sock, Target> {
     pub fn new(
         sock: Sock,
-        store: Store,
+        store: Target,
         state: Option<(u16, Serial)>
     ) -> Self {
         Client {
@@ -46,10 +46,10 @@ impl<Sock, Store> Client<Sock, Store> {
     }
 }
 
-impl<Sock, Store> Client<Sock, Store>
+impl<Sock, Target> Client<Sock, Target>
 where
     Sock: AsyncRead + AsyncWrite + Unpin,
-    Store: VrpStore
+    Target: VrpTarget
 {
     pub async fn run(&mut self) -> Result<(), io::Error> {
         match self._run().await {
@@ -167,7 +167,7 @@ where
 }
 
 
-impl<Sock, Store> Client<Sock, Store> {
+impl<Sock, Target> Client<Sock, Target> {
     async fn try_io<'a, F, Fut, T>(&'a mut self, op: F) -> Result<T, io::Error>
     where
         F: FnOnce(&'a mut Sock) -> Fut,
