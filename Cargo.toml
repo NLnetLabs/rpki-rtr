@@ -14,5 +14,5 @@ license = "BSD-3-Clause"
 [dependencies]
 futures   = "0.3"
 log 	  = "0.4.8"
-tokio	  = { version="0.2", features=["io-util", "rt-core", "stream", "sync", "tcp", "time"]}
+tokio	  = { version="0.2.18", features=["io-util", "rt-core", "stream", "sync", "tcp", "time"]}
 
