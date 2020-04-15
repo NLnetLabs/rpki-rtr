@@ -27,7 +27,7 @@ use crate::state::State;
 const IO_TIMEOUT: Duration = Duration::from_secs(1);
 
 
-//------------ VrpTarget and VrpUpdate ---------------------------------------
+//------------ VrpTarget -----------------------------------------------------
 
 /// A type that keeps data received via RTR.
 ///
@@ -35,9 +35,9 @@ const IO_TIMEOUT: Duration = Duration::from_secs(1);
 /// Validated RPKI Payload. It is modified by atomic updates that add
 /// or remove items of the set.
 ///
-/// This trait provides a method to start and update which then happens
-/// through a different type that implements the companion [`VrpUpdate`]
-/// trait.
+/// This trait provides a method to start and apply updates which are
+/// collected into a different type that implements the companion
+/// [`VrpUpdate`] trait.
 ///
 /// [`VrpUpdate`]: trait.VrpUpdate.html
 pub trait VrpTarget {
@@ -45,25 +45,43 @@ pub trait VrpTarget {
     type Update: VrpUpdate;
 
     /// Starts a new update.
-    fn start(&mut self) -> Self::Update;
+    ///
+    /// If the update is a for a reset query, `reset` will be `true`, meaning
+    /// that when the update is applied, all previous data should be removed.
+    /// This flag is repeated later in `apply`, leaving it to implementations
+    /// whether to store updates differently for reset and serial queries.
+    fn start(&mut self, reset: bool) -> Self::Update;
 
-    /// Applies an update.
+    /// Applies an update to the target.
+    ///
+    /// The data to apply is handed over via `update`. If `reset` is `true`,
+    /// the data should replace the current data of the target. Otherwise it
+    /// entries should be added and removed according to the action. The
+    /// `timing` parameter contains the timing information provided by the
+    /// server.
     fn apply(
         &mut self, update: Self::Update, reset: bool, timing: Timing
     ) -> Result<(), io::Error>;
 }
 
+
+//------------ VrpUpdate -----------------------------------------------------
+
 /// A type that can receive a VRP data update.
 ///
-/// The update happens by repeatedly calling the [`push`] method with a
+/// The update happens by repeatedly calling the [`push_vrp`] method with a
 /// single update as received by the client. The data is not filtered. It
 /// may contain duplicates and it may conflict with the current data set.
 /// It is the task of the implementor to deal with such situations.
 ///
-/// Note that if an update fails halfway for some reason, the value of this
-/// type is simply dropped.
+/// A value of this type is created via `VrpTarget::start` when the client
+/// starts processing an update. If the update succeeds, the value is applied
+/// to the target by giving it to `VrpTarget::apply`. If the update fails at
+/// any point, the valus is simply dropped.
 ///
-/// [`push`]: #method.push
+/// [`push_vrp`]: #method.push_vrp
+/// [`VrpTarget::start`]: trait.VrpTarget.html#method.start
+/// [`VrpTarget::apply`]: trait.VrpTarget.html#method.apply
 pub trait VrpUpdate {
     /// Updates one single VRP.
     ///
@@ -227,7 +245,7 @@ where
         };
         self.check_version(start.version())?;
 
-        let mut target = self.target.start();
+        let mut target = self.target.start(false);
         loop {
             match pdu::Payload::read(&mut self.sock).await? {
                 Ok(Some(payload)) => {
@@ -261,7 +279,7 @@ where
             pdu::CacheResponse::read(sock)
         }).await?;
         self.check_version(start.version())?;
-        let mut target = self.target.start();
+        let mut target = self.target.start(true);
         loop {
             match pdu::Payload::read(&mut self.sock).await? {
                 Ok(Some(payload)) => {

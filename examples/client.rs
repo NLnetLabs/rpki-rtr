@@ -12,7 +12,7 @@ pub struct Store {
 impl VrpTarget for Store {
     type Update = Vec<(Action, Payload)>;
 
-    fn start(&mut self) -> Self::Update {
+    fn start(&mut self, _: bool) -> Self::Update {
         Vec::new()
     }
 
