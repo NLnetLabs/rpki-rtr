@@ -17,7 +17,7 @@ use std::marker::Unpin;
 use futures::future::Future;
 use tokio::time::{Duration, timeout};
 use tokio::io::{AsyncRead, AsyncWrite};
-use crate::payload::{Action, Payload};
+use crate::payload::{Action, Payload, Timing};
 use crate::pdu;
 use crate::state::State;
 
@@ -78,7 +78,7 @@ pub trait VrpUpdate {
     /// If the update could be successfully applied to the data set, the
     /// method should return `Ok(())`. Otherwise it should return an error
     /// which will lead to the client terminating.
-    fn done(self, timing: pdu::Timing) -> Result<(), io::Error>;
+    fn done(self, timing: Timing) -> Result<(), io::Error>;
 }
 
 
@@ -119,7 +119,7 @@ pub struct Client<Sock, Target> {
     ///
     /// We use the `refresh` value to determine how long to wait before
     /// requesting an update. The other values we just report to the target.
-    timing: pdu::Timing,
+    timing: Timing,
 }
 
 impl<Sock, Target> Client<Sock, Target> {
@@ -144,7 +144,7 @@ impl<Sock, Target> Client<Sock, Target> {
         Client {
             sock, target, state,
             version: None,
-            timing: pdu::Timing::default(),
+            timing: Timing::default(),
         }
     }
 

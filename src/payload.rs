@@ -135,3 +135,32 @@ impl Action {
     }
 }
 
+
+//------------ Timing --------------------------------------------------------
+
+/// The timing parameters of a data exchange.
+///
+/// These three values are included in the end-of-data PDU of version 1
+/// onwards.
+#[derive(Clone, Copy, Debug)]
+pub struct Timing {
+    /// The number of seconds until a client should refresh its data.
+    pub refresh: u32,
+
+    /// The number of seconds a client whould wait before retrying to connect.
+    pub retry: u32,
+
+    /// The number of secionds before data expires if not refreshed.
+    pub expire: u32
+}
+
+impl Default for Timing {
+    fn default() -> Self {
+        Timing {
+            refresh: 3600,
+            retry: 600,
+            expire: 7200
+        }
+    }
+}
+

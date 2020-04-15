@@ -650,7 +650,7 @@ impl EndOfData {
     pub fn new(
         version: u8,
         state: State,
-        timing: Timing,
+        timing: payload::Timing,
     ) -> Self {
         if version == 0 {
             EndOfData::V0(EndOfDataV0::new(state))
@@ -720,7 +720,7 @@ impl EndOfData {
     /// Returns the three timing values if they are available.
     ///
     /// The values are only available in the `V1` variant.
-    pub fn timing(&self) -> Option<Timing> {
+    pub fn timing(&self) -> Option<payload::Timing> {
         match *self {
             EndOfData::V0(_) => None,
             EndOfData::V1(ref data) => Some(data.timing()),
@@ -810,7 +810,7 @@ impl EndOfDataV1 {
     pub fn new(
         version: u8,
         state: State,
-        timing: Timing,
+        timing: payload::Timing,
     ) -> Self {
         EndOfDataV1 {
             header: Header::new(version, Self::PDU, state.session(), 24),
@@ -827,8 +827,8 @@ impl EndOfDataV1 {
     }
 
     /// Returns the timing paramters.
-    pub fn timing(&self) -> Timing {
-        Timing {
+    pub fn timing(&self) -> payload::Timing {
+        payload::Timing {
             refresh: u32::from_be(self.refresh),
             retry: u32::from_be(self.retry),
             expire: u32::from_be(self.expire),
@@ -1066,33 +1066,4 @@ impl Header {
 }
 
 common!(Header);
-
-
-//------------ Timing --------------------------------------------------------
-
-/// The timing parameters of a data exchange.
-///
-/// These three values are included in the end-of-data PDU of version 1
-/// onwards.
-#[derive(Clone, Copy, Debug)]
-pub struct Timing {
-    /// The number of seconds until a client should refresh its data.
-    pub refresh: u32,
-
-    /// The number of seconds a client whould wait before retrying to connect.
-    pub retry: u32,
-
-    /// The number of secionds before data expires if not refreshed.
-    pub expire: u32
-}
-
-impl Default for Timing {
-    fn default() -> Self {
-        Timing {
-            refresh: 3600,
-            retry: 600,
-            expire: 7200
-        }
-    }
-}
 

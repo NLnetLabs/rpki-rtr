@@ -15,7 +15,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::stream::{Stream, StreamExt};
 use tokio::sync::broadcast;
 use tokio::task::spawn;
-use crate::payload::{Action, Payload};
+use crate::payload::{Action, Payload, Timing};
 use crate::pdu;
 use crate::state::State;
 
@@ -68,7 +68,7 @@ pub trait VrpSource: Clone + Sync + Send + 'static {
     fn diff(&self, state: State) -> Option<(State, Self::DiffIter)>;
 
     /// Returns the timing information for the current state.
-    fn timing(&self) -> pdu::Timing;
+    fn timing(&self) -> Timing;
 }
 
 

@@ -28,8 +28,7 @@
 //! [RFC 8210]: https://tools.ietf.org/html/rfc8210
 
 pub use self::client::Client;
-pub use self::payload::Payload;
-pub use self::pdu::Timing;
+pub use self::payload::{Action, Payload, Timing};
 pub use self::server::Server;
 pub use self::state::State;
 
