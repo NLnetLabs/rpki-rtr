@@ -30,7 +30,7 @@
 pub use self::client::Client;
 pub use self::payload::{Action, Payload, Timing};
 pub use self::server::Server;
-pub use self::state::State;
+pub use self::state::{State, Serial};
 
 pub mod client;
 pub mod payload;
