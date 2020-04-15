@@ -13,8 +13,8 @@
 //! [`VrpTarget`]: trait VrpTarget.html
 //! [`VrpUpdate`]: trait.VrpUpdate.html
 use std::io;
+use std::future::Future;
 use std::marker::Unpin;
-use futures::future::Future;
 use tokio::time::{Duration, timeout};
 use tokio::io::{AsyncRead, AsyncWrite};
 use crate::payload::{Action, Payload, Timing};

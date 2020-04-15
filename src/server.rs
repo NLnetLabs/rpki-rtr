@@ -7,9 +7,9 @@
 //! [`VrpSource`]: trait.VrpSource.html
 use std::io;
 use std::marker::Unpin;
-use futures::future;
-use futures::pin_mut;
-use futures::future::Either;
+use futures_util::future;
+use futures_util::pin_mut;
+use futures_util::future::Either;
 use log::debug;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::stream::{Stream, StreamExt};
