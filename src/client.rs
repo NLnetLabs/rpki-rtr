@@ -201,12 +201,11 @@ where
                 }
             }
 
-            match timeout(
+            if let Ok(Err(err)) = timeout(
                 Duration::from_secs(u64::from(self.timing.refresh)),
                 pdu::SerialNotify::read(&mut self.sock)
             ).await {
-                Ok(Err(err)) => return Err(err),
-                _ => { }
+                return Err(err)
             }
         }
     }

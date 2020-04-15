@@ -470,6 +470,12 @@ impl NotifySender {
     }
 }
 
+impl Default for NotifySender {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 
 //------------ NotifyReceiver ------------------------------------------------
 
