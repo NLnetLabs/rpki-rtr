@@ -1,3 +1,10 @@
+//! The RTR server.
+//!
+//! This module implements a generic RTR server through [`Server`]. The server
+//! receives its data from a type implementing [`VrpSource`].
+//!
+//! [`Server`]: struct.Server.html
+//! [`VrpSource`]: trait.VrpSource.html
 use std::io;
 use std::marker::Unpin;
 use std::sync::{Arc, Mutex};
@@ -13,42 +20,97 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::task::spawn;
 use crate::payload::{Action, Payload};
 use crate::pdu;
-use crate::serial::Serial;
+use crate::state::State;
 
 
 //------------ VrpSource -----------------------------------------------------
 
+/// A source of VRPs for an RTR server.
+///
+/// A type implementing this trait can be used by the [`Server`] as a source
+/// for VRPs. The server needs four things from such a source:
+///
+/// *  the current state of the source through the [`notify`] method,
+/// *  an iterator over the full set of VRPs via the [`full`] method,
+/// *  an iterator over the difference of the data between the given state
+///    and the current state via the [`diff`] method, and
+/// *  the current timing values via the [`timing`] method.
+///
+/// The server will never ask for any of these things unless the [`ready`]
+/// method returns `true`. This allows the source to finish its initial
+/// validation.
+///
+/// [`ready`]: #method.ready
+/// [`notify`]: #method.notify
+/// [`full`]: #method.full
+/// [`diff`]: #method.diff
+/// [`timing`]: #method.timing
 pub trait VrpSource: Clone + Sync + Send + 'static {
+    /// An iterator over the complete set of VRPs.
     type FullIter: Iterator<Item = Payload> + Sync + Send + 'static;
+
+    /// An iterator over a difference between two sets of VRPs.
     type DiffIter: Iterator<Item = (Action, Payload)>  + Sync + Send + 'static;
 
+    /// Returns whether the source is ready to serve data.
     fn ready(&self) -> bool;
-    fn notify(&self) -> (u16, Serial);
-    fn full(&self) -> (u16, Serial, Self::FullIter);
-    fn diff(
-        &self, session: u16, serial: Serial
-    ) -> Option<(u16, Serial, Self::DiffIter)>;
+
+    /// Returns the current state of the source.
+    ///
+    /// This is used by the source when sending out a serial notify .
+    fn notify(&self) -> State;
+
+    /// Returns the current state and an iterator over the full set of VRPs.
+    fn full(&self) -> (State, Self::FullIter);
+
+    /// Returns the current state and an interator over differences in VPRs.
+    ///
+    /// The difference is between the state given in `state` and the current
+    /// state. If the source cannot provide this difference, for instance
+    /// because the serial is too old, it returns `None` instead.
+    fn diff(&self, state: State) -> Option<(State, Self::DiffIter)>;
+
+    /// Returns the timing information for the current state.
     fn timing(&self) -> pdu::Timing;
 }
 
 
 //------------ Server --------------------------------------------------------
 
+/// An RTR server.
+///
+/// The server takes a stream socket listener – a stream of new sockets – and
+/// a VRP source and serves RTR data. In order to also serve notifications
+/// whenever new data is available, the server uses a notification dispatch
+/// system via the [`Dispatch`] system.
+///
+/// [`Dispatch`]: struct.Dispatch.html
 pub struct Server<Listener, Source> {
+    /// The listener socket.
     listener: Listener,
+
+    /// The dispatcher for notifications.
     dispatch: Dispatch,
-    store: Source,
+
+    /// The source of VRPs.
+    source: Source,
 }
 
 impl<Listener, Source> Server<Listener, Source> {
+    /// Creates a new RTR server from its components.
     pub fn new(
-        listener: Listener, dispatch: Dispatch, store: Source
+        listener: Listener, dispatch: Dispatch, source: Source
     ) -> Self {
         Server { 
-            listener, dispatch, store
+            listener, dispatch, source
         }
     }
 
+    /// Runs the server.
+    ///
+    /// The asynchronous function will return successfully when the listener
+    /// socket (which is a stream over new connectons) finishes. It will
+    /// return with an error if the listener socket errors out.
     pub async fn run<Sock>(mut self) -> Result<(), io::Error>
     where
         Listener:
@@ -59,7 +121,7 @@ impl<Listener, Source> Server<Listener, Source> {
         while let Some(sock) = self.listener.next().await {
             let _ = spawn(
                 Connection::new(
-                    sock?, self.dispatch.get_receiver(), self.store.clone()
+                    sock?, self.dispatch.get_receiver(), self.source.clone()
                 ).run()
             );
         }
@@ -70,21 +132,37 @@ impl<Listener, Source> Server<Listener, Source> {
 
 //------------ Connection ----------------------------------------------------
 
+/// A single server connection.
 struct Connection<Sock, Source> {
+    /// The socket to run the connection on.
     sock: Sock,
+
+    /// The receiver for update notifications.
     notify: NotifyReceiver,
-    store: Source,
+
+    /// The VRP source.
+    source: Source,
+
+    /// The RTR protocol version this connection is using.
+    ///
+    /// This will start out as `None` and will only be set once the client
+    /// tells us its supported version.
     version: Option<u8>,
 }
 
 impl<Sock, Source> Connection<Sock, Source> {
-    fn new(sock: Sock, notify: NotifyReceiver, store: Source) -> Self {
+    /// Wraps a socket into a connection value.
+    fn new(sock: Sock, notify: NotifyReceiver, source: Source) -> Self {
         Connection {
-            sock, notify, store,
+            sock, notify, source,
             version: None,
         }
     }
 
+    /// Returns the protocol version we agreed on.
+    ///
+    /// If there hasn’t been a negotation yet, returns the lowest protocol
+    /// version we support, which currently is 0.
     fn version(&self) -> u8 {
         match self.version {
             Some(version) => version,
@@ -100,11 +178,16 @@ where
     Sock: AsyncRead + AsyncWrite + Unpin + Sync + Send + 'static,
     Source: VrpSource
 {
+    /// Runs the connection until it is done.
+    ///
+    /// Returns successfully if the connection was closed cleanly. Returns an
+    /// error if there was an error. However, those errors are basically
+    /// ignored – this is only here for easy question mark use.
     async fn run(mut self) -> Result<(), io::Error> {
         while let Some(query) = self.recv().await? {
             match query {
-                Query::Serial { session, serial } => {
-                    self.serial(session, serial).await?
+                Query::Serial(state) => {
+                    self.serial(state).await?
                 }
                 Query::Reset => {
                     self.reset().await?
@@ -126,6 +209,12 @@ where
 ///
 impl<Sock, Source> Connection<Sock, Source>
 where Sock: AsyncRead + Unpin {
+    /// Receives the next query.
+    ///
+    /// This can either be a notification that the source has updated data
+    /// available or an actual query received from the client.
+    ///
+    /// It can also be an error if reading from the socket fails.
     async fn recv(&mut self) -> Result<Option<Query>, io::Error> {
         let header = {
             let notify = self.notify.recv();
@@ -149,17 +238,18 @@ where Sock: AsyncRead + Unpin {
             return Ok(Some(err))
         }
         match header.pdu() {
-            pdu::SERIAL_QUERY_PDU => {
+            pdu::SerialQuery::PDU => {
                 debug!("RTR: Got serial query.");
-                match Self::check_length(header, pdu::SERIAL_QUERY_LEN) {
+                match Self::check_length(
+                    header, pdu::SerialQuery::size()
+                ) {
                     Ok(()) => {
                         let payload = pdu::SerialQueryPayload::read(
                             &mut self.sock
                         ).await?;
-                        Ok(Some(Query::Serial {
-                            session: header.session(),
-                            serial: payload.serial()
-                        }))
+                        Ok(Some(Query::Serial(State::from_parts(
+                            header.session(), payload.serial()
+                        ))))
                     }
                     Err(err) => {
                         debug!("RTR: ... with bad length");
@@ -169,7 +259,9 @@ where Sock: AsyncRead + Unpin {
             }
             pdu::ResetQuery::PDU => {
                 debug!("RTR: Got reset query.");
-                match Self::check_length(header, pdu::ResetQuery::LEN) {
+                match Self::check_length(
+                    header, pdu::ResetQuery::size()
+                ) {
                     Ok(()) => Ok(Some(Query::Reset)),
                     Err(err) => {
                         debug!("RTR: ... with bad length");
@@ -191,6 +283,10 @@ where Sock: AsyncRead + Unpin {
         }
     }
 
+    /// Checks the version of a PDU-
+    ///
+    /// Returns an error with the error PDU if the version doesn’t match with
+    /// what we agreed upon earlier.
     fn check_version(
         &mut self,
         header: pdu::Header
@@ -226,6 +322,9 @@ where Sock: AsyncRead + Unpin {
         }
     }
 
+    /// Checks that the size of a PDU matches an expected size.
+    ///
+    /// Returns an error response if not.
     fn check_length(header: pdu::Header, expected: u32) -> Result<(), Query> {
         if header.length() != expected {
             Err(Query::Error(
@@ -251,34 +350,36 @@ where
     Sock: AsyncWrite + Unpin + Sync + Send + 'static,
     Source: VrpSource
 {
-    async fn serial(
-        &mut self, session: u16, serial: Serial
-    ) -> Result<(), io::Error> {
-        debug!("RTR server: request for serial {}", serial);
-        if !self.store.ready() {
+    /// Sends out a response to a serial query.
+    ///
+    /// The client’s current state is in `state`. Responds accordingly on
+    /// whether the source is ready and there is or isn’t a diff for that
+    /// state. Only returns an error when the socket goes kaputt.
+    async fn serial(&mut self, state: State) -> Result<(), io::Error> {
+        debug!("RTR server: request for serial {}", state.serial());
+        if !self.source.ready() {
             return pdu::Error::new(
                 self.version(), 2, (), *b"Running initial validation"
             ).write(&mut self.sock).await;
         }
-        match self.store.diff(session, serial) {
-            Some((session, serial, diff)) => {
-                debug!("RTR server: store has a diff");
+        match self.source.diff(state) {
+            Some((state, diff)) => {
+                debug!("RTR server: source has a diff");
                 pdu::CacheResponse::new(
-                    self.version(), session
+                    self.version(), state,
                 ).write(&mut self.sock).await?;
                 for (action, payload) in diff {
                     pdu::Payload::new(
                         self.version(), action.into_flags(), payload
                     ).write(&mut self.sock).await?;
                 }
-                let timing = self.store.timing();
+                let timing = self.source.timing();
                 pdu::EndOfData::new(
-                    self.version(), session, serial,
-                    timing.refresh, timing.retry, timing.expire
+                    self.version(), state, timing
                 ).write(&mut self.sock).await
             }
             None => {
-                debug!("RTR server: store ain't got no diff for that.");
+                debug!("RTR server: source ain't got no diff for that.");
                 pdu::CacheReset::new(self.version()).write(
                     &mut self.sock
                 ).await
@@ -286,38 +387,45 @@ where
         }
     }
 
+    /// Sends out a sesponse to a reset query.
+    ///
+    /// Responds accordingly based on whether or not the source is ready.
+    /// Only returns an error if writing to the socket fails.
     async fn reset(&mut self) -> Result<(), io::Error> {
-        if !self.store.ready() {
+        if !self.source.ready() {
             return pdu::Error::new(
                 self.version(), 2, (), *b"Running initial validation"
             ).write(&mut self.sock).await;
         }
-        let (session, serial, iter) = self.store.full();
+        let (state, iter) = self.source.full();
         pdu::CacheResponse::new(
-            self.version(), session
+            self.version(), state
         ).write(&mut self.sock).await?;
         for payload in iter {
             pdu::Payload::new(
                 self.version(), Action::Announce.into_flags(), payload
             ).write(&mut self.sock).await?;
         }
-        let timing = self.store.timing();
+        let timing = self.source.timing();
         pdu::EndOfData::new(
-            self.version(), session, serial,
-            timing.refresh, timing.retry, timing.expire
+            self.version(), state, timing
         ).write(&mut self.sock).await
     }
 
+    /// Sends an error response.
     async fn error(
         &mut self, err: pdu::BoxedError
     ) -> Result<(), io::Error> {
         err.write(&mut self.sock).await
     }
 
+    /// Sends a serial notify query.
+    ///
+    /// The state for the notify is taken from the source.
     async fn notify(&mut self) -> Result<(), io::Error> {
-        let (session, serial) = self.store.notify();
+        let state = self.source.notify();
         pdu::SerialNotify::new(
-            self.version(), session, serial
+            self.version(), state
         ).write(&mut self.sock).await
     }
 }
@@ -325,25 +433,32 @@ where
 
 //------------ Query ---------------------------------------------------------
 
-pub enum Query {
-    Serial {
-        session: u16,
-        serial: Serial,
-    },
+/// What a server was asked to do next.
+enum Query {
+    /// A serial query with the given state was received from the client.
+    Serial(State),
+
+    /// A reset query as received from the client.
     Reset,
+
+    /// The client misbehaved resulting in this error to be sent to it.
     Error(pdu::BoxedError),
+
+    /// The source has new data available.
     Notify
 }
 
 
 //------------ NotifySender --------------------------------------------------
 
+/// A sender to notify a server that there are updates available.
 #[derive(Clone, Debug)]
 pub struct NotifySender {
     tx: Sender<Message>,
 }
 
 impl NotifySender {
+    /// Notifies the server that there are updates available.
     pub fn notify(&mut self) {
         // Each sender gets one guaranteed message. Since we only ever send
         // notify messages, if we can’t queue a message, there’s already an
@@ -355,8 +470,12 @@ impl NotifySender {
 
 //------------ NotifyReceiver ------------------------------------------------
 
+/// The receiver for notifications.
+///
+/// This type is used by connections.
 #[derive(Debug)]
-pub struct NotifyReceiver {
+struct NotifyReceiver {
+    /// The receiving end of 
     rx: Option<Receiver<()>>,
     tx: Sender<Message>,
     id: usize,
@@ -403,7 +522,7 @@ impl Dispatch {
         }
     }
 
-    pub fn get_receiver(&mut self) -> NotifyReceiver {
+    fn get_receiver(&mut self) -> NotifyReceiver {
         let (tx, rx) = channel(1);
         let mut inner = self.0.lock().unwrap();
         NotifyReceiver {

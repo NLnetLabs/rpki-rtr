@@ -31,10 +31,11 @@ pub use self::client::Client;
 pub use self::payload::Payload;
 pub use self::pdu::Timing;
 pub use self::server::Server;
+pub use self::state::State;
 
 pub mod client;
 pub mod payload;
-pub mod pdu;
-pub mod serial;
+pub mod state;
 pub mod server;
 
+mod pdu;

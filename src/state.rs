@@ -1,11 +1,98 @@
-//! Serial numbers.
+//! Session state.
 //!
-//! This module define a type [`Serial`] that wraps a `u32` to provide
-//! serial number arithmetics.
+//! This module defines the types to remember that state of a session with a
+//! particular RTR server. The complete state, encapsulated in the type
+//! [`State`] consists of a sixteen bit session id and a serial number. Since
+//! the serial number follows special rules, it has its own type [`Serial`].
 //!
 //! [`Serial`]: struct.Serial.html
+//! [`State`]: struct.State.html
 
 use std::{cmp, fmt, hash, str};
+use std::time::SystemTime;
+
+
+//------------ State ---------------------------------------------------------
+
+/// The RTR session state.
+///
+/// This state consists of a session ID describing a continuous session with
+/// the same evolving data set a server is running and a serial number that
+/// describes a particular version of this set.
+///
+/// Both a session ID and an initial serial number are chosen when a new
+/// session is started. Whenever data is being updated, the serial number is
+/// increased by one.
+///
+/// This type contains both these values. You can create the state values for
+/// a new session with [`new`] and increase the serial number with [`inc`].
+///
+/// [`new`]: #method.new
+/// [`inc`]: #method.inc
+#[derive(Clone, Copy, Debug)]
+pub struct State {
+    session: u16,
+    serial: Serial
+}
+
+impl State {
+    /// Creates a state value for a new session.
+    ///
+    /// This will pick a session ID based on the lower 16 bit of the current
+    /// Unix time and an initial serial of 0. If you want to choose a
+    /// different starting serial, you can use [`new_with_serial`] instead.
+    ///
+    /// [`new_with_serial`]: #method.new_with_serial
+    pub fn new() -> Self {
+        Self::new_with_serial(0.into())
+    }
+
+    /// Creates a state value with a given initial serial number.
+    ///
+    /// The function will use a session ID based on the lower 16 bit of the
+    /// current time and an initial serial of `serial`.
+    pub fn new_with_serial(serial: Serial) -> Self {
+        State {
+            session: {
+                SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH).unwrap()
+                .as_secs() as u16
+            },
+            serial
+        }
+    }
+
+    /// Creates a new state value from its components.
+    pub fn from_parts(session: u16, serial: Serial) -> Self {
+        State { session, serial }
+    }
+
+    /// Increases the serial number by one.
+    ///
+    /// Serial number may wrap but that’s totally fine. See [`Serial`] for
+    /// more details.
+    ///
+    /// [`Serial`]: struct.Serial.html
+    pub fn inc(&mut self) {
+        self.serial = self.serial.add(1)
+    }
+
+    /// Returns the session ID.
+    pub fn session(self) -> u16 {
+        self.session
+    }
+
+    /// Returns the serial number.
+    pub fn serial(self) -> Serial {
+        self.serial
+    }
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 
 //------------ Serial --------------------------------------------------------
