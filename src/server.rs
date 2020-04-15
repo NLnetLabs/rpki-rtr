@@ -7,16 +7,13 @@
 //! [`VrpSource`]: trait.VrpSource.html
 use std::io;
 use std::marker::Unpin;
-use std::sync::{Arc, Mutex};
 use futures::future;
+use futures::pin_mut;
 use futures::future::Either;
 use log::debug;
-use pin_utils::pin_mut;
-use slab::Slab;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::stream::{Stream, StreamExt};
-use tokio::sync::mpsc::{channel, Receiver, Sender};
-use tokio::sync::mpsc::error::TrySendError;
+use tokio::sync::broadcast;
 use tokio::task::spawn;
 use crate::payload::{Action, Payload};
 use crate::pdu;
@@ -89,8 +86,10 @@ pub struct Server<Listener, Source> {
     /// The listener socket.
     listener: Listener,
 
-    /// The dispatcher for notifications.
-    dispatch: Dispatch,
+    /// The sender for notifications.
+    ///
+    /// We keep this here because we can use it to fabricate new receivers.
+    notify: NotifySender,
 
     /// The source of VRPs.
     source: Source,
@@ -99,11 +98,9 @@ pub struct Server<Listener, Source> {
 impl<Listener, Source> Server<Listener, Source> {
     /// Creates a new RTR server from its components.
     pub fn new(
-        listener: Listener, dispatch: Dispatch, source: Source
+        listener: Listener, notify: NotifySender, source: Source
     ) -> Self {
-        Server { 
-            listener, dispatch, source
-        }
+        Server { listener, notify, source }
     }
 
     /// Runs the server.
@@ -121,7 +118,7 @@ impl<Listener, Source> Server<Listener, Source> {
         while let Some(sock) = self.listener.next().await {
             let _ = spawn(
                 Connection::new(
-                    sock?, self.dispatch.get_receiver(), self.source.clone()
+                    sock?, self.notify.subscribe(), self.source.clone()
                 ).run()
             );
         }
@@ -453,17 +450,18 @@ enum Query {
 
 /// A sender to notify a server that there are updates available.
 #[derive(Clone, Debug)]
-pub struct NotifySender {
-    tx: Sender<Message>,
-}
+pub struct NotifySender(broadcast::Sender<()>);
 
 impl NotifySender {
     /// Notifies the server that there are updates available.
     pub fn notify(&mut self) {
-        // Each sender gets one guaranteed message. Since we only ever send
-        // notify messages, if we can’t queue a message, there’s already an
-        // unprocessed notification and we are fine.
-        let _ = self.tx.try_send(Message::Notify);
+        // Sending only fails if all receivers have been dropped. We can
+        // ignore that case.
+        let _ = self.0.send(());
+    }
+
+    fn subscribe(&self) -> NotifyReceiver {
+        NotifyReceiver(Some(self.0.subscribe()))
     }
 }
 
@@ -474,131 +472,34 @@ impl NotifySender {
 ///
 /// This type is used by connections.
 #[derive(Debug)]
-struct NotifyReceiver {
-    /// The receiving end of 
-    rx: Option<Receiver<()>>,
-    tx: Sender<Message>,
-    id: usize,
-}
+struct NotifyReceiver(Option<broadcast::Receiver<()>>);
 
 impl NotifyReceiver {
-    pub async fn recv(&mut self)
-    where Self: std::marker::Unpin {
-        match self.rx {
-            None => return future::pending().await,
-            Some(ref mut rx) => {
-                if let Some(()) = rx.next().await {
-                    return
+    pub async fn recv(&mut self) {
+        use tokio::sync::broadcast::{RecvError, TryRecvError};
+
+        if let Some(ref mut rx) = self.0 {
+            match rx.recv().await {
+                Ok(()) => {
+                    return;
                 }
+                Err(RecvError::Lagged(_)) => {
+                    // We don’t really care about missed messages since our
+                    // messages have no meaning.
+                    //
+                    // I think we need to get the latest value, though, but
+                    // again, we don’t care.
+                    if let Err(TryRecvError::Closed) = rx.try_recv() {
+                    }
+                    else {
+                        return
+                    }
+                }
+                Err(RecvError::Closed) => { /* fall through */ }
             }
         }
-        self.rx = None;
+        self.0 = None;
         future::pending().await
     }
-}
-
-impl Drop for NotifyReceiver {
-    fn drop(&mut self) {
-        let _ = self.tx.try_send(Message::Close(self.id));
-    }
-}
-
-
-//------------ Dispatch ------------------------------------------------------
-
-#[derive(Clone, Debug)]
-pub struct Dispatch(Arc<Mutex<DispatchInner>>);
-
-#[derive(Clone, Debug)]
-struct DispatchInner {
-    connections: Slab<Sender<()>>,
-    tx: Sender<Message>,
-}
-
-impl Dispatch {
-    pub fn get_sender(&self) -> NotifySender {
-        NotifySender {
-            tx: self.0.lock().unwrap().tx.clone()
-        }
-    }
-
-    fn get_receiver(&mut self) -> NotifyReceiver {
-        let (tx, rx) = channel(1);
-        let mut inner = self.0.lock().unwrap();
-        NotifyReceiver {
-            rx: Some(rx),
-            tx: inner.tx.clone(),
-            id: inner.connections.insert(tx),
-        }
-    }
-
-    fn notify(&mut self) {
-        self.0.lock().unwrap().connections.retain(|_, tx| {
-            match tx.try_send(()) {
-                Err(TrySendError::Closed(_)) => false,
-                _ => true
-            }
-        })
-    }
-
-    fn close(&mut self, id: usize) {
-        let _ = self.0.lock().unwrap().connections.remove(id);
-    }
-}
-
-
-//------------ DispatchRunner ------------------------------------------------
-
-pub struct DispatchRunner {
-    dispatch: Dispatch,
-    rx: Option<Receiver<Message>>,
-}
-
-impl DispatchRunner {
-    pub fn new() -> Self {
-        let (tx, rx) = channel(1);
-        let dispatch = Dispatch(Arc::new(Mutex::new(
-            DispatchInner {
-                connections: Slab::new(),
-                tx,
-            }
-        )));
-        DispatchRunner {
-            dispatch,
-            rx: Some(rx)
-        }
-    }
-
-    pub fn dispatch(&self) -> Dispatch {
-        self.dispatch.clone()
-    }
-
-    pub async fn run(&mut self) {
-        loop {
-            let msg = match self.rx {
-                None => return future::pending().await,
-                Some(ref mut rx) => rx.next().await,
-            };
-            match msg {
-                Some(Message::Notify) => self.dispatch.notify(),
-                Some(Message::Close(id)) => self.dispatch.close(id),
-                None => {
-                    self.rx = None;
-                }
-            }
-        }
-    }
-}
-
-
-//------------ Message -------------------------------------------------------
-
-#[derive(Clone, Copy, Debug)]
-enum Message {
-    // Send a new notification, please.
-    Notify,
-
-    // The connection with the given index is done.
-    Close(usize),
 }
 

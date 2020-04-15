@@ -60,6 +60,8 @@ pub trait VrpTarget {
 ///
 /// Note that if an update fails halfway for some reason, the value of this
 /// type is simply dropped.
+///
+/// [`push`]: #method.push
 pub trait VrpUpdate {
     /// Updates one single VRP.
     ///
@@ -132,6 +134,8 @@ impl<Sock, Target> Client<Sock, Target> {
     /// your target in this case since the there will not necessarily be a
     /// reset update. If you don’t have any state or don’t want to reuse an
     /// earlier session, simply pass `None`.
+    ///
+    /// [`state`]: #method.state
     pub fn new(
         sock: Sock,
         target: Target,
