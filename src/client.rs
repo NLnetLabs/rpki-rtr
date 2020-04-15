@@ -45,10 +45,12 @@ pub trait VrpTarget {
     type Update: VrpUpdate;
 
     /// Starts a new update.
-    ///
-    /// If `reset` is `true`, the current content of the target should be
-    /// dropped before applying the update.
-    fn start(&mut self, reset: bool) -> Self::Update;
+    fn start(&mut self) -> Self::Update;
+
+    /// Applies an update.
+    fn apply(
+        &mut self, update: Self::Update, reset: bool, timing: Timing
+    ) -> Result<(), io::Error>;
 }
 
 /// A type that can receive a VRP data update.
@@ -68,17 +70,13 @@ pub trait VrpUpdate {
     /// The `action` argument describes whether the VRP is to be announced,
     /// i.e., added to the data set, or withdrawn, i.e., removed. The VRP
     /// itself is given via `payload`.
-    fn push(&mut self, action: Action, payload: Payload);
+    fn push_vrp(&mut self, action: Action, payload: Payload);
+}
 
-    /// Finishes the update.
-    ///
-    /// Marks the successul conclusion of the update. The `timing` argument
-    /// contains the timing information provided by the server.
-    ///
-    /// If the update could be successfully applied to the data set, the
-    /// method should return `Ok(())`. Otherwise it should return an error
-    /// which will lead to the client terminating.
-    fn done(self, timing: Timing) -> Result<(), io::Error>;
+impl VrpUpdate for Vec<(Action, Payload)> {
+    fn push_vrp(&mut self, action: Action, payload: Payload) {
+        self.push((action, payload))
+    }
 }
 
 
@@ -229,13 +227,13 @@ where
         };
         self.check_version(start.version())?;
 
-        let mut target = self.target.start(false);
+        let mut target = self.target.start();
         loop {
             match pdu::Payload::read(&mut self.sock).await? {
                 Ok(Some(payload)) => {
                     self.check_version(payload.version())?;
                     let (action, payload) = payload.into_payload();
-                    target.push(action, payload);
+                    target.push_vrp(action, payload);
                 }
                 Ok(None) => {
                     // Unsupported but legal payload: ignore.
@@ -250,7 +248,7 @@ where
                 }
             }
         }
-        target.done(self.timing)?;
+        self.target.apply(target, false, self.timing)?;
         Ok(true)
     }
 
@@ -263,13 +261,13 @@ where
             pdu::CacheResponse::read(sock)
         }).await?;
         self.check_version(start.version())?;
-        let mut target = self.target.start(true);
+        let mut target = self.target.start();
         loop {
             match pdu::Payload::read(&mut self.sock).await? {
                 Ok(Some(payload)) => {
                     self.check_version(payload.version())?;
                     let (action, payload) = payload.into_payload();
-                    target.push(action, payload);
+                    target.push_vrp(action, payload);
                 }
                 Ok(None) => {
                     // Unsupported but legal payload: ignore.
@@ -284,7 +282,7 @@ where
                 }
             }
         }
-        target.done(self.timing)?;
+        self.target.apply(target, true, self.timing)?;
         Ok(())
     }
 

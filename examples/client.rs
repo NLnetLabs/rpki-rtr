@@ -1,36 +1,40 @@
 use std::io;
 use std::collections::HashSet;
-use rpki_rtr::payload::{Action, Payload};
-use rpki_rtr::client::{Client, VrpStore};
+use rpki_rtr::payload::{Action, Payload, Timing};
+use rpki_rtr::client::{Client, VrpTarget};
 use tokio::net::TcpStream;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Store {
     payload: HashSet<Payload>,
 }
 
-impl VrpStore for Store {
-    fn start(&mut self, reset: bool) {
+impl VrpTarget for Store {
+    type Update = Vec<(Action, Payload)>;
+
+    fn start(&mut self) -> Self::Update {
+        Vec::new()
+    }
+
+    fn apply(
+        &mut self, update: Self::Update, reset: bool, _timing: Timing
+    ) -> Result<(), io::Error> {
         if reset {
             self.payload.clear();
         }
-    }
-
-    fn push(&mut self, action: Action, payload: Payload) {
-        match action {
-            Action::Announce => {
-                println!("Adding {:?}", payload);
-                let _ = self.payload.insert(payload);
-            }
-            Action::Withdraw => {
-                println!("Removing {:?}", payload);
-                let _ = self.payload.remove(&payload);
+        for (action, payload)in update {
+            match action {
+                Action::Announce => {
+                    println!("Adding {:?}", payload);
+                    let _ = self.payload.insert(payload);
+                }
+                Action::Withdraw => {
+                    println!("Removing {:?}", payload);
+                    let _ = self.payload.remove(&payload);
+                }
             }
         }
-    }
-
-    fn done(&mut self) {
-        println!("Complete.");
+        Ok(())
     }
 }
 
