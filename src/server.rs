@@ -453,6 +453,11 @@ enum Query {
 pub struct NotifySender(broadcast::Sender<()>);
 
 impl NotifySender {
+    /// Creates a new notify sender.
+    pub fn new() -> NotifySender {
+        NotifySender(broadcast::channel(1).0)
+    }
+
     /// Notifies the server that there are updates available.
     pub fn notify(&mut self) {
         // Sending only fails if all receivers have been dropped. We can
