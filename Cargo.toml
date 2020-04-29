@@ -1,6 +1,6 @@
 [package]
 name = "rpki-rtr"
-version = "0.1.1"
+version = "0.1.1-bis"
 edition = "2018"
 authors = ["The NLnet Labs RPKI Team <rpki-team@nlnetlabs.nl>"]
 description = "A library for RPKI RTR."
