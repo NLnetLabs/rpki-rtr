@@ -4,10 +4,11 @@
 
 Dependencies
 
-* Downgrade required tokio version to 0.2.11, the version we actually
-  require. ([#1])
+* Downgrades dependencies to the lowest versions actually required:
+  futures-util 0.3, log 0.4.4., and tokio 0.2.11. ([#1], [#2])
 
 [#1]: https://github.com/NLnetLabs/rpki-rtr/pull/1
+[#2]: https://github.com/NLnetLabs/rpki-rtr/pull/2
 
 
 ## 0.1.0
