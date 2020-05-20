@@ -8,7 +8,11 @@ Bug Fixes
 
 New
 
+* Implemented `Default` for `state::Serial` [(#4])
+
 Other Changes
+
+[#4]: https://github.com/NLnetLabs/rpki-rtr/pull/4
 
 
 ## 0.1.1

@@ -143,6 +143,15 @@ impl Serial {
 }
 
 
+//--- Default
+
+impl Default for Serial {
+    fn default() -> Self {
+        Self::from(0)
+    }
+}
+
+
 //--- From and FromStr
 
 impl From<u32> for Serial {
