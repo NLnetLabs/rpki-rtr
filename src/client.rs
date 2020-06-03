@@ -297,7 +297,7 @@ where
     }
 
     /// Performs a reset query.
-    async fn reset(&mut self) -> Result<Target::Update, io::Error> {
+    pub async fn reset(&mut self) -> Result<Target::Update, io::Error> {
         pdu::ResetQuery::new(
             self.version.unwrap_or(1)
         ).write(&mut self.sock).await?;
