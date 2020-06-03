@@ -207,13 +207,16 @@ where
         loop {
             match self.state {
                 Some(state) => {
-                    if !self.serial(state).await? {
-                        // Do it again! Do it again!
-                        continue
+                    match self.serial(state).await? {
+                        Some(update) => {
+                            self.target.apply(update, false, self.timing)?;
+                        }
+                        None => continue,
                     }
                 }
                 None => {
-                    self.reset().await?;
+                    let update = self.reset().await?;
+                    self.target.apply(update, true, self.timing)?;
                 }
             }
 
@@ -226,13 +229,37 @@ where
         }
     }
 
+    pub async fn update_now(&mut self) -> Result<Target::Update, io::Error> {
+        if let Some(state) = self.state {
+            if let Some(update) = self.serial(state).await? {
+                return Ok(update)
+            }
+        }
+        self.reset().await
+    }
+
+    pub async fn wait_and_update(
+        &mut self
+    ) -> Result<Target::Update, io::Error> {
+        if let Ok(Err(err)) = timeout(
+            Duration::from_secs(u64::from(self.timing.refresh)),
+            pdu::SerialNotify::read(&mut self.sock)
+        ).await {
+            return Err(err)
+        }
+        self.update_now().await
+    }
+
+
     /// Perform a serial query.
     ///
-    /// Returns `Ok(true)` if the query succeeded and the client should now
-    /// wait for a while. Returns `Ok(false)` if the server reported a
-    /// restart and we need to proceed with a reset query. Returns an error
+    /// Returns some update if the query succeeded and the client should now
+    /// wait for a while. Returns `Non` if the server reported a restart and
+    /// we need to proceed with a reset query. Returns an error
     /// in any other case.
-    async fn serial(&mut self, state: State) -> Result<bool, io::Error> {
+    async fn serial(
+        &mut self, state: State
+    ) -> Result<Option<Target::Update>, io::Error> {
         pdu::SerialQuery::new(
             self.version.unwrap_or(1), state,
         ).write(&mut self.sock).await?;
@@ -240,7 +267,7 @@ where
             FirstReply::Response(start) => start,
             FirstReply::Reset(_) => {
                 self.state = None;
-                return Ok(false)
+                return Ok(None)
             }
         };
         self.check_version(start.version())?;
@@ -266,12 +293,11 @@ where
                 }
             }
         }
-        self.target.apply(target, false, self.timing)?;
-        Ok(true)
+        Ok(Some(target))
     }
 
     /// Performs a reset query.
-    async fn reset(&mut self) -> Result<(), io::Error> {
+    async fn reset(&mut self) -> Result<Target::Update, io::Error> {
         pdu::ResetQuery::new(
             self.version.unwrap_or(1)
         ).write(&mut self.sock).await?;
@@ -300,8 +326,7 @@ where
                 }
             }
         }
-        self.target.apply(target, true, self.timing)?;
-        Ok(())
+        Ok(target)
     }
 
     /// Performs some IO operation on the socket.
