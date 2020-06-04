@@ -88,12 +88,17 @@ pub trait VrpUpdate {
     /// The `action` argument describes whether the VRP is to be announced,
     /// i.e., added to the data set, or withdrawn, i.e., removed. The VRP
     /// itself is given via `payload`.
-    fn push_vrp(&mut self, action: Action, payload: Payload);
+    fn push_vrp(
+        &mut self, action: Action, payload: Payload
+    ) -> Result<(), VrpError>;
 }
 
 impl VrpUpdate for Vec<(Action, Payload)> {
-    fn push_vrp(&mut self, action: Action, payload: Payload) {
-        self.push((action, payload))
+    fn push_vrp(
+        &mut self, action: Action, payload: Payload
+    ) -> Result<(), VrpError> {
+        self.push((action, payload));
+        Ok(())
     }
 }
 
@@ -170,6 +175,11 @@ impl<Sock, Target> Client<Sock, Target> {
     /// there has not been any converstation with the server yet.
     pub fn state(&self) -> Option<State> {
         self.state
+    }
+
+    /// Returns the protocol version to use.
+    fn version(&self) -> u8 {
+        self.version.unwrap_or(1)
     }
 }
 
@@ -261,7 +271,7 @@ where
         &mut self, state: State
     ) -> Result<Option<Target::Update>, io::Error> {
         pdu::SerialQuery::new(
-            self.version.unwrap_or(1), state,
+            self.version(), state,
         ).write(&mut self.sock).await?;
         let start = match self.try_io(FirstReply::read).await? {
             FirstReply::Response(start) => start,
@@ -275,10 +285,13 @@ where
         let mut target = self.target.start(false);
         loop {
             match pdu::Payload::read(&mut self.sock).await? {
-                Ok(Some(payload)) => {
-                    self.check_version(payload.version())?;
-                    let (action, payload) = payload.into_payload();
-                    target.push_vrp(action, payload);
+                Ok(Some(pdu)) => {
+                    self.check_version(pdu.version())?;
+                    let (action, payload) = pdu.to_payload();
+                    if let Err(err) = target.push_vrp(action, payload) {
+                        err.send(self.version(), pdu, &mut self.sock).await?;
+                        return Err(io::Error::new(io::ErrorKind::Other, ""));
+                    }
                 }
                 Ok(None) => {
                     // Unsupported but legal payload: ignore.
@@ -299,7 +312,7 @@ where
     /// Performs a reset query.
     pub async fn reset(&mut self) -> Result<Target::Update, io::Error> {
         pdu::ResetQuery::new(
-            self.version.unwrap_or(1)
+            self.version()
         ).write(&mut self.sock).await?;
         let start = self.try_io(|sock| {
             pdu::CacheResponse::read(sock)
@@ -308,10 +321,13 @@ where
         let mut target = self.target.start(true);
         loop {
             match pdu::Payload::read(&mut self.sock).await? {
-                Ok(Some(payload)) => {
-                    self.check_version(payload.version())?;
-                    let (action, payload) = payload.into_payload();
-                    target.push_vrp(action, payload);
+                Ok(Some(pdu)) => {
+                    self.check_version(pdu.version())?;
+                    let (action, payload) = pdu.to_payload();
+                    if let Err(err) = target.push_vrp(action, payload) {
+                        err.send(self.version(), pdu, &mut self.sock).await?;
+                        return Err(io::Error::new(io::ErrorKind::Other, ""));
+                    }
                 }
                 Ok(None) => {
                     // Unsupported but legal payload: ignore.
@@ -418,6 +434,54 @@ impl FirstReply {
                     io::ErrorKind::InvalidData,
                     format!("unexpected PDU {}", pdu)
                 ))
+            }
+        }
+    }
+}
+
+
+//------------ VrpError ------------------------------------------------------
+
+/// A received VRP was not acceptable.
+#[derive(Clone, Copy, Debug)]
+pub enum VrpError {
+    /// A nonexisting record was withdrawn.
+    UnknownWithdraw,
+
+    /// An existing record was announced again.
+    DuplicateAnnounce,
+
+    /// The record is corrupt.
+    Corrupt,
+
+    /// An internal error in the receiver happend.
+    Internal,
+}
+
+impl VrpError {
+    fn error_code(self) -> u16 {
+        match self {
+            VrpError::UnknownWithdraw => 6,
+            VrpError::DuplicateAnnounce => 7,
+            VrpError::Corrupt => 0,
+            VrpError::Internal => 1
+        }
+    }
+
+    async fn send(
+        self, version: u8, pdu: pdu::Payload,
+        sock: &mut (impl AsyncWrite + Unpin)
+    ) -> Result<(), io::Error> {
+        match pdu {
+            pdu::Payload::V4(pdu) => {
+                pdu::Error::new(
+                    version, self.error_code(), pdu, ""
+                ).write(sock).await
+            }
+            pdu::Payload::V6(pdu) => {
+                pdu::Error::new(
+                    version, self.error_code(), pdu, ""
+                ).write(sock).await
             }
         }
     }
