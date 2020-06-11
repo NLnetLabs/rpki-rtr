@@ -42,23 +42,28 @@ use crate::state::State;
 /// [`full`]: #method.full
 /// [`diff`]: #method.diff
 /// [`timing`]: #method.timing
-pub trait VrpSource: Clone + Sync + Send + 'static {
-    /// An iterator over the complete set of VRPs.
-    type FullIter: Iterator<Item = Payload> + Send + Sync;
-
-    /// An iterator over a difference between two sets of VRPs.
-    type DiffIter: Iterator<Item = (Action, Payload)>  + Sync + Send;
-
+pub trait VrpSource: Clone + Sync + Send + 'static + for<'a> IterVrps<'a> {
     /// Returns whether the source is ready to serve data.
     fn ready(&self) -> bool;
+
+    /// Returns the timing information for the current state.
+    fn timing(&self) -> Timing;
+}
+
+pub trait IterVrps<'a> {
+    /// An iterator over the complete set of VRPs.
+    type FullIter: Iterator<Item = &'a Payload> + Send + Sync;
+
+    /// An iterator over a difference between two sets of VRPs.
+    type DiffIter: Iterator<Item = (Action, &'a Payload)>  + Sync + Send;
 
     /// Returns the current state of the source.
     ///
     /// This is used by the source when sending out a serial notify .
-    fn notify(&self) -> State;
+    fn notify(&'a self) -> State;
 
     /// Returns the current state and an iterator over the full set of VRPs.
-    fn full(&self) -> (State, Self::FullIter);
+    fn full(&'a self) -> (State, Self::FullIter);
 
     /// Returns the current state and an interator over differences in VPRs.
     ///
@@ -66,9 +71,6 @@ pub trait VrpSource: Clone + Sync + Send + 'static {
     /// state. If the source cannot provide this difference, for instance
     /// because the serial is too old, it returns `None` instead.
     fn diff(&self, state: State) -> Option<(State, Self::DiffIter)>;
-
-    /// Returns the timing information for the current state.
-    fn timing(&self) -> Timing;
 }
 
 
@@ -367,7 +369,7 @@ where
                 ).write(&mut self.sock).await?;
                 for (action, payload) in diff {
                     pdu::Payload::new(
-                        self.version(), action.into_flags(), payload
+                        self.version(), action.into_flags(), *payload
                     ).write(&mut self.sock).await?;
                 }
                 let timing = self.source.timing();
@@ -400,7 +402,7 @@ where
         ).write(&mut self.sock).await?;
         for payload in iter {
             pdu::Payload::new(
-                self.version(), Action::Announce.into_flags(), payload
+                self.version(), Action::Announce.into_flags(), *payload
             ).write(&mut self.sock).await?;
         }
         let timing = self.source.timing();
