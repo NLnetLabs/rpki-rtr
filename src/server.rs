@@ -44,10 +44,10 @@ use crate::state::State;
 /// [`timing`]: #method.timing
 pub trait VrpSource: Clone + Sync + Send + 'static {
     /// An iterator over the complete set of VRPs.
-    type FullIter: Iterator<Item = Payload> + Sync + Send + 'static;
+    type FullIter: Iterator<Item = Payload> + Send + Sync;
 
     /// An iterator over a difference between two sets of VRPs.
-    type DiffIter: Iterator<Item = (Action, Payload)>  + Sync + Send + 'static;
+    type DiffIter: Iterator<Item = (Action, Payload)>  + Sync + Send;
 
     /// Returns whether the source is ready to serve data.
     fn ready(&self) -> bool;
