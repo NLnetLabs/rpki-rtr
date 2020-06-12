@@ -61,7 +61,7 @@ pub trait VrpTarget {
     /// server.
     fn apply(
         &mut self, update: Self::Update, reset: bool, timing: Timing
-    ) -> Result<(), io::Error>;
+    ) -> Result<(), VrpError>;
 }
 
 
@@ -219,14 +219,14 @@ where
                 Some(state) => {
                     match self.serial(state).await? {
                         Some(update) => {
-                            self.target.apply(update, false, self.timing)?;
+                            self.apply(update, false).await?;
                         }
                         None => continue,
                     }
                 }
                 None => {
                     let update = self.reset().await?;
-                    self.target.apply(update, true, self.timing)?;
+                    self.apply(update, true).await?;
                 }
             }
 
@@ -289,7 +289,9 @@ where
                     self.check_version(pdu.version())?;
                     let (action, payload) = pdu.to_payload();
                     if let Err(err) = target.push_vrp(action, payload) {
-                        err.send(self.version(), pdu, &mut self.sock).await?;
+                        err.send(
+                            self.version(), Some(pdu), &mut self.sock
+                        ).await?;
                         return Err(io::Error::new(io::ErrorKind::Other, ""));
                     }
                 }
@@ -325,7 +327,9 @@ where
                     self.check_version(pdu.version())?;
                     let (action, payload) = pdu.to_payload();
                     if let Err(err) = target.push_vrp(action, payload) {
-                        err.send(self.version(), pdu, &mut self.sock).await?;
+                        err.send(
+                            self.version(), Some(pdu), &mut self.sock
+                        ).await?;
                         return Err(io::Error::new(io::ErrorKind::Other, ""));
                     }
                 }
@@ -343,6 +347,19 @@ where
             }
         }
         Ok(target)
+    }
+
+    /// Tries to apply an update and sends errors if that fails.
+    async fn apply(
+        &mut self, update: Target::Update, reset: bool
+    ) -> Result<(), io::Error> {
+        if let Err(err) = self.target.apply(update, reset, self.timing) {
+            err.send(self.version(), None, &mut self.sock).await?;
+            Err(io::Error::new(io::ErrorKind::Other, ""))
+        }
+        else {
+            Ok(())
+        }
     }
 
     /// Performs some IO operation on the socket.
@@ -469,18 +486,23 @@ impl VrpError {
     }
 
     async fn send(
-        self, version: u8, pdu: pdu::Payload,
+        self, version: u8, pdu: Option<pdu::Payload>,
         sock: &mut (impl AsyncWrite + Unpin)
     ) -> Result<(), io::Error> {
         match pdu {
-            pdu::Payload::V4(pdu) => {
+            Some(pdu::Payload::V4(pdu)) => {
                 pdu::Error::new(
                     version, self.error_code(), pdu, ""
                 ).write(sock).await
             }
-            pdu::Payload::V6(pdu) => {
+            Some(pdu::Payload::V6(pdu)) => {
                 pdu::Error::new(
                     version, self.error_code(), pdu, ""
+                ).write(sock).await
+            }
+            None => {
+                pdu::Error::new(
+                    version, self.error_code(), "", ""
                 ).write(sock).await
             }
         }
