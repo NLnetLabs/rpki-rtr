@@ -1,7 +1,7 @@
 use std::io;
 use std::collections::HashSet;
 use rpki_rtr::payload::{Action, Payload, Timing};
-use rpki_rtr::client::{Client, VrpTarget};
+use rpki_rtr::client::{Client, VrpError, VrpTarget};
 use tokio::net::TcpStream;
 
 #[derive(Clone, Default)]
@@ -18,7 +18,7 @@ impl VrpTarget for Store {
 
     fn apply(
         &mut self, update: Self::Update, reset: bool, _timing: Timing
-    ) -> Result<(), io::Error> {
+    ) -> Result<(), VrpError> {
         if reset {
             self.payload.clear();
         }
