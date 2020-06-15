@@ -169,6 +169,11 @@ impl<Sock, Target> Client<Sock, Target> {
         }
     }
 
+    /// Converts the client into its target.
+    pub fn into_target(self) -> Target {
+        self.target
+    }
+
     /// Returns the current state of the session.
     ///
     /// The method will return `None` if there hasn’t been initial state and
