@@ -8,6 +8,7 @@
 //! they become necessary. So don’t hesitate to ask for them!
 
 use std::net::{Ipv4Addr, Ipv6Addr};
+use std::time::Duration;
 
 
 //------------ IPv4Prefix ----------------------------------------------------
@@ -152,6 +153,12 @@ pub struct Timing {
 
     /// The number of secionds before data expires if not refreshed.
     pub expire: u32
+}
+
+impl Timing {
+    pub fn refresh_duration(self) -> Duration {
+        Duration::from_secs(u64::from(self.refresh))
+    }
 }
 
 impl Default for Timing {

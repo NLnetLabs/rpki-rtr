@@ -15,7 +15,7 @@
 use std::io;
 use std::future::Future;
 use std::marker::Unpin;
-use tokio::time::{Duration, timeout};
+use tokio::time::{timeout, timeout_at, Duration, Instant};
 use tokio::io::{AsyncRead, AsyncWrite};
 use crate::payload::{Action, Payload, Timing};
 use crate::pdu;
@@ -141,6 +141,11 @@ pub struct Client<Sock, Target> {
     /// We use the `refresh` value to determine how long to wait before
     /// requesting an update. The other values we just report to the target.
     timing: Timing,
+
+    /// The next time we should be running.
+    ///
+    /// If this is None, we should be running now.
+    next_update: Option<Instant>,
 }
 
 impl<Sock, Target> Client<Sock, Target> {
@@ -166,6 +171,7 @@ impl<Sock, Target> Client<Sock, Target> {
             sock, target, state,
             version: None,
             timing: Timing::default(),
+            next_update: None,
         }
     }
 
@@ -244,25 +250,27 @@ where
         }
     }
 
-    pub async fn update_now(&mut self) -> Result<Target::Update, io::Error> {
+    pub async fn update(
+        &mut self
+    ) -> Result<Target::Update, io::Error> {
+        if let Some(instant) = self.next_update.take() {
+            if let Ok(Err(err)) = timeout_at(
+                instant, pdu::SerialNotify::read(&mut self.sock)
+            ).await {
+                return Err(err)
+            }
+        }
+
         if let Some(state) = self.state {
             if let Some(update) = self.serial(state).await? {
                 return Ok(update)
             }
         }
-        self.reset().await
-    }
-
-    pub async fn wait_and_update(
-        &mut self
-    ) -> Result<Target::Update, io::Error> {
-        if let Ok(Err(err)) = timeout(
-            Duration::from_secs(u64::from(self.timing.refresh)),
-            pdu::SerialNotify::read(&mut self.sock)
-        ).await {
-            return Err(err)
-        }
-        self.update_now().await
+        let res = self.reset().await;
+        self.next_update = Some(
+            Instant::now() + self.timing.refresh_duration()
+        );
+        res
     }
 
 
