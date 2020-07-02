@@ -273,6 +273,9 @@ where
 
         if let Some(state) = self.state {
             if let Some(update) = self.serial(state).await? {
+                self.next_update = Some(
+                    Instant::now() + self.timing.refresh_duration()
+                );
                 return Ok(update)
             }
         }
@@ -287,7 +290,7 @@ where
     /// Perform a serial query.
     ///
     /// Returns some update if the query succeeded and the client should now
-    /// wait for a while. Returns `Non` if the server reported a restart and
+    /// wait for a while. Returns `None` if the server reported a restart and
     /// we need to proceed with a reset query. Returns an error
     /// in any other case.
     async fn serial(

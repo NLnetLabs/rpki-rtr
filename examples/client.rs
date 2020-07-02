@@ -12,13 +12,15 @@ pub struct Store {
 impl VrpTarget for Store {
     type Update = Vec<(Action, Payload)>;
 
-    fn start(&mut self, _: bool) -> Self::Update {
+    fn start(&mut self, reset: bool) -> Self::Update {
+        println!("Starting update (reset={})", reset);
         Vec::new()
     }
 
     fn apply(
         &mut self, update: Self::Update, reset: bool, _timing: Timing
     ) -> Result<(), VrpError> {
+        println!("Update complete: {} entries", update.len());
         if reset {
             self.payload.clear();
         }
@@ -40,7 +42,7 @@ impl VrpTarget for Store {
 
 #[tokio::main]
 async fn main() -> Result<(), io::Error> {
-    let sock = TcpStream::connect("127.0.0.1:3323").await?;
+    let sock = TcpStream::connect("127.0.0.1:9001").await?;
     let mut client = Client::new(sock, Store::default(), None);
     client.run().await
 }
