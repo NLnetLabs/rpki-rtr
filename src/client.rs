@@ -175,6 +175,16 @@ impl<Sock, Target> Client<Sock, Target> {
         }
     }
 
+    /// Returns a reference to the target.
+    pub fn target(&self) -> &Target {
+        &self.target
+    }
+
+    /// Returns a mutable reference to the target.
+    pub fn target_mut(&mut self) -> &mut Target {
+        &mut self.target
+    }
+
     /// Converts the client into its target.
     pub fn into_target(self) -> Target {
         self.target
