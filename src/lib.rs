@@ -15,7 +15,7 @@
 //! over a type that provides or consumes the data. For more details, see the
 //! [`Server`] and [`Client`] types.
 //!
-//! The create implements both versions 0 and 1 of the protocol. It does not,
+//! The crate implements both versions 0 and 1 of the protocol. It does not,
 //! currently, support router keys, though.
 //!
 //! You can read more about RPKI in [RFC 6480]. RTR is currently specified in
