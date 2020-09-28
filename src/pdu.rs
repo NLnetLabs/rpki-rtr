@@ -7,6 +7,7 @@
 //! the two versions.
 
 use std::{io, mem, slice};
+use std::convert::TryFrom;
 use std::marker::Unpin;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use tokio::io::{
@@ -122,7 +123,7 @@ macro_rules! concrete {
             ) -> Result<Result<Self, Header>, io::Error> {
                 let mut res = Self::default();
                 sock.read_exact(res.header.as_mut()).await?;
-                if res.header.pdu() == ERROR_PDU {
+                if res.header.pdu() == Error::PDU {
                     // Since we should drop the session after an error, we
                     // can safely ignore all the rest of the error for now.
                     return Ok(Err(res.header))
@@ -872,18 +873,14 @@ concrete!(CacheReset);
 /// An error report signals that something went wrong.
 ///
 /// Error reports contain an error code and can contain both the erroneous
-/// PDU and some diagnostic error text. This makes them rather unwieldy.
-///
-/// The type is generic over the PDU and the text. These types must have
-/// values that are the wire representation of their content. For the PDU,
-/// you should use a concrete from this module. For the text, you can use
-/// a string literal with the text which is in fact an array of the right
-/// size. You cannot, however, use a `String` or a `&str` here as they are
-/// really just pointers.
+/// PDU and some diagnostic error text. Because of this, values of this type
+/// are not fixed size byte arrays but rather are allocated according to the
+/// contents of these two fields.
 #[derive(Default)]
-#[repr(packed)]
-#[allow(dead_code)]
-pub struct Error<P: Sized, T: Sized> {
+pub struct Error {
+    octets: Vec<u8>,
+}
+/*
     /// The header of the error PDU.
     header: Header,
 
@@ -898,42 +895,45 @@ pub struct Error<P: Sized, T: Sized> {
 
     /// The embedded text.
     text: T
-}
+*/
 
-/// The PDU type of an error PDU.
-pub const ERROR_PDU: u8 = 10;
+impl Error {
+    /// The PDU type of an error PDU.
+    pub const PDU: u8 = 10;
 
-impl<P, T> Error<P, T> 
-where
-    P: Sized + 'static + Send + Sync,
-    T: Sized + 'static + Send + Sync,
-{
     /// Creates a new error PDU from components.
     pub fn new(
         version: u8,
         error_code: u16,
-        pdu: P,
-        text: T
+        pdu: impl AsRef<[u8]>,
+        text: impl AsRef<[u8]>,
     ) -> Self {
-        Error {
-            header: Header::new(
-                version, 10, error_code,
-                16 + mem::size_of::<P>() as u32 + mem::size_of::<T>() as u32
-            ),
-            pdu_len: (mem::size_of::<P>() as u32).to_be(),
-            pdu,
-            text_len: (mem::size_of::<T>() as u32).to_be(),
-            text
-        }
+        let pdu = pdu.as_ref();
+        let text = text.as_ref();
+
+        let size = 
+            mem::size_of::<Header>()
+            + 2 * mem::size_of::<u32>()
+            + pdu.len() + text.len()
+        ;
+        let header = Header::new(
+            version, 10, error_code, u32::try_from(size).unwrap()
+        );
+
+        let mut octets = Vec::with_capacity(size);
+        octets.extend_from_slice(header.as_ref());
+        octets.extend_from_slice(
+            u32::try_from(pdu.len()).unwrap().to_be_bytes().as_ref()
+        );
+        octets.extend_from_slice(pdu);
+        octets.extend_from_slice(
+            u32::try_from(text.len()).unwrap().to_be_bytes().as_ref()
+        );
+        octets.extend_from_slice(text);
+
+        Error { octets }
     }
 
-    //// Returns a boxed version of this PDU.
-    pub fn boxed(self) -> BoxedError {
-        BoxedError(Box::new(self))
-    }
-}
-
-impl<P: Sized, T: Sized> Error<P, T> {
     /// Writes the PUD to a writer.
     pub async fn write<A: AsyncWrite + Unpin>(
         &self, a: &mut A
@@ -945,53 +945,15 @@ impl<P: Sized, T: Sized> Error<P, T> {
 
 //--- AsRef and AsMut
 
-impl<P: Sized, T: Sized> AsRef<[u8]> for Error<P, T> {
+impl AsRef<[u8]> for Error {
     fn as_ref(&self) -> &[u8] {
-        unsafe {
-            slice::from_raw_parts(
-                self as *const Self as *const u8,
-                mem::size_of::<Self>()
-            )
-        }
+        self.octets.as_ref()
     }
 }
 
-impl<P: Sized, T: Sized> AsMut<[u8]> for Error<P, T> {
+impl AsMut<[u8]> for Error {
     fn as_mut(&mut self) -> &mut [u8] {
-        unsafe {
-            slice::from_raw_parts_mut(
-                self as *mut Self as *mut u8,
-                mem::size_of::<Self>()
-            )
-        }
-    }
-}
-
-
-//------------ BoxedError ----------------------------------------------------
-
-/// A boxed error PDU.
-///
-/// Since `pdu::Error` has type parameters, it is often practical to use a
-/// boxed version that takes those away. The only thing you can do with
-/// values of this type is write them to a writer.
-pub struct BoxedError(Box<dyn AsRef<[u8]> + Sync + Send>);
-
-impl BoxedError {
-    /// Writes the PDU to a writer.
-    pub async fn write<A: AsyncWrite + Unpin>(
-        &self, a: &mut A
-    ) -> Result<(), io::Error> {
-        a.write_all(self.as_ref()).await
-    }
-}
-
-
-//--- AsRef
-
-impl AsRef<[u8]> for BoxedError {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_ref().as_ref()
+        self.octets.as_mut()
     }
 }
 

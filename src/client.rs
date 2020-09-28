@@ -266,7 +266,15 @@ where
                 }
             }
         }
-        self.target.apply(target, false, self.timing)?;
+        if let Err(err) = self.target.apply(target, false, self.timing) {
+            // XXX Temporary error message. We need to fix error handling
+            //     properly.
+            pdu::Error::new(
+                self.version.unwrap_or(1),
+                0, "", b"corrupt data"
+            ).write(&mut self.sock).await?;
+            return Err(err)
+        }
         Ok(true)
     }
 
@@ -300,7 +308,15 @@ where
                 }
             }
         }
-        self.target.apply(target, true, self.timing)?;
+        if let Err(err) = self.target.apply(target, true, self.timing) {
+            // XXX Temporary error message. We need to fix error handling
+            //     properly.
+            pdu::Error::new(
+                self.version.unwrap_or(1),
+                0, "", b"corrupt data"
+            ).write(&mut self.sock).await?;
+            return Err(err)
+        }
         Ok(())
     }
 
@@ -382,7 +398,7 @@ impl FirstReply {
                     header, sock
                 ).await.map(FirstReply::Reset)
             }
-            pdu::ERROR_PDU => {
+            pdu::Error::PDU => {
                 Err(io::Error::new(
                     io::ErrorKind::Other,
                     format!("server reported error {}", header.session())
