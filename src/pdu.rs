@@ -583,7 +583,7 @@ impl Payload {
     }
 
     /// Converts the payload PDU into action and payload.
-    pub fn into_payload(self) -> (payload::Action, payload::Payload) {
+    pub fn to_payload(&self) -> (payload::Action, payload::Payload) {
         (
             payload::Action::from_flags(self.flags()),
             match self {

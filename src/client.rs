@@ -15,7 +15,7 @@
 use std::io;
 use std::future::Future;
 use std::marker::Unpin;
-use tokio::time::{Duration, timeout};
+use tokio::time::{timeout, timeout_at, Duration, Instant};
 use tokio::io::{AsyncRead, AsyncWrite};
 use crate::payload::{Action, Payload, Timing};
 use crate::pdu;
@@ -61,7 +61,7 @@ pub trait VrpTarget {
     /// server.
     fn apply(
         &mut self, update: Self::Update, reset: bool, timing: Timing
-    ) -> Result<(), io::Error>;
+    ) -> Result<(), VrpError>;
 }
 
 
@@ -88,12 +88,17 @@ pub trait VrpUpdate {
     /// The `action` argument describes whether the VRP is to be announced,
     /// i.e., added to the data set, or withdrawn, i.e., removed. The VRP
     /// itself is given via `payload`.
-    fn push_vrp(&mut self, action: Action, payload: Payload);
+    fn push_vrp(
+        &mut self, action: Action, payload: Payload
+    ) -> Result<(), VrpError>;
 }
 
 impl VrpUpdate for Vec<(Action, Payload)> {
-    fn push_vrp(&mut self, action: Action, payload: Payload) {
-        self.push((action, payload))
+    fn push_vrp(
+        &mut self, action: Action, payload: Payload
+    ) -> Result<(), VrpError> {
+        self.push((action, payload));
+        Ok(())
     }
 }
 
@@ -136,6 +141,11 @@ pub struct Client<Sock, Target> {
     /// We use the `refresh` value to determine how long to wait before
     /// requesting an update. The other values we just report to the target.
     timing: Timing,
+
+    /// The next time we should be running.
+    ///
+    /// If this is None, we should be running now.
+    next_update: Option<Instant>,
 }
 
 impl<Sock, Target> Client<Sock, Target> {
@@ -161,7 +171,23 @@ impl<Sock, Target> Client<Sock, Target> {
             sock, target, state,
             version: None,
             timing: Timing::default(),
+            next_update: None,
         }
+    }
+
+    /// Returns a reference to the target.
+    pub fn target(&self) -> &Target {
+        &self.target
+    }
+
+    /// Returns a mutable reference to the target.
+    pub fn target_mut(&mut self) -> &mut Target {
+        &mut self.target
+    }
+
+    /// Converts the client into its target.
+    pub fn into_target(self) -> Target {
+        self.target
     }
 
     /// Returns the current state of the session.
@@ -170,6 +196,11 @@ impl<Sock, Target> Client<Sock, Target> {
     /// there has not been any converstation with the server yet.
     pub fn state(&self) -> Option<State> {
         self.state
+    }
+
+    /// Returns the protocol version to use.
+    fn version(&self) -> u8 {
+        self.version.unwrap_or(1)
     }
 }
 
@@ -207,13 +238,16 @@ where
         loop {
             match self.state {
                 Some(state) => {
-                    if !self.serial(state).await? {
-                        // Do it again! Do it again!
-                        continue
+                    match self.serial(state).await? {
+                        Some(update) => {
+                            self.apply(update, false).await?;
+                        }
+                        None => continue,
                     }
                 }
                 None => {
-                    self.reset().await?;
+                    let update = self.reset().await?;
+                    self.apply(update, true).await?;
                 }
             }
 
@@ -226,21 +260,56 @@ where
         }
     }
 
+    /// Performs a single update of the client data.
+    ///
+    /// The method will wait until the next update is due and the request one
+    /// single update from the server. It will request a new update object
+    /// from the target, apply the update to that object and, if the update
+    /// succeeds, return the object.
+    pub async fn update(
+        &mut self
+    ) -> Result<Target::Update, io::Error> {
+        if let Some(instant) = self.next_update.take() {
+            if let Ok(Err(err)) = timeout_at(
+                instant, pdu::SerialNotify::read(&mut self.sock)
+            ).await {
+                return Err(err)
+            }
+        }
+
+        if let Some(state) = self.state {
+            if let Some(update) = self.serial(state).await? {
+                self.next_update = Some(
+                    Instant::now() + self.timing.refresh_duration()
+                );
+                return Ok(update)
+            }
+        }
+        let res = self.reset().await;
+        self.next_update = Some(
+            Instant::now() + self.timing.refresh_duration()
+        );
+        res
+    }
+
+
     /// Perform a serial query.
     ///
-    /// Returns `Ok(true)` if the query succeeded and the client should now
-    /// wait for a while. Returns `Ok(false)` if the server reported a
-    /// restart and we need to proceed with a reset query. Returns an error
+    /// Returns some update if the query succeeded and the client should now
+    /// wait for a while. Returns `None` if the server reported a restart and
+    /// we need to proceed with a reset query. Returns an error
     /// in any other case.
-    async fn serial(&mut self, state: State) -> Result<bool, io::Error> {
+    async fn serial(
+        &mut self, state: State
+    ) -> Result<Option<Target::Update>, io::Error> {
         pdu::SerialQuery::new(
-            self.version.unwrap_or(1), state,
+            self.version(), state,
         ).write(&mut self.sock).await?;
         let start = match self.try_io(FirstReply::read).await? {
             FirstReply::Response(start) => start,
             FirstReply::Reset(_) => {
                 self.state = None;
-                return Ok(false)
+                return Ok(None)
             }
         };
         self.check_version(start.version())?;
@@ -248,10 +317,15 @@ where
         let mut target = self.target.start(false);
         loop {
             match pdu::Payload::read(&mut self.sock).await? {
-                Ok(Some(payload)) => {
-                    self.check_version(payload.version())?;
-                    let (action, payload) = payload.into_payload();
-                    target.push_vrp(action, payload);
+                Ok(Some(pdu)) => {
+                    self.check_version(pdu.version())?;
+                    let (action, payload) = pdu.to_payload();
+                    if let Err(err) = target.push_vrp(action, payload) {
+                        err.send(
+                            self.version(), Some(pdu), &mut self.sock
+                        ).await?;
+                        return Err(io::Error::new(io::ErrorKind::Other, ""));
+                    }
                 }
                 Ok(None) => {
                     // Unsupported but legal payload: ignore.
@@ -266,22 +340,13 @@ where
                 }
             }
         }
-        if let Err(err) = self.target.apply(target, false, self.timing) {
-            // XXX Temporary error message. We need to fix error handling
-            //     properly.
-            pdu::Error::new(
-                self.version.unwrap_or(1),
-                0, "", b"corrupt data"
-            ).write(&mut self.sock).await?;
-            return Err(err)
-        }
-        Ok(true)
+        Ok(Some(target))
     }
 
     /// Performs a reset query.
-    async fn reset(&mut self) -> Result<(), io::Error> {
+    pub async fn reset(&mut self) -> Result<Target::Update, io::Error> {
         pdu::ResetQuery::new(
-            self.version.unwrap_or(1)
+            self.version()
         ).write(&mut self.sock).await?;
         let start = self.try_io(|sock| {
             pdu::CacheResponse::read(sock)
@@ -290,10 +355,15 @@ where
         let mut target = self.target.start(true);
         loop {
             match pdu::Payload::read(&mut self.sock).await? {
-                Ok(Some(payload)) => {
-                    self.check_version(payload.version())?;
-                    let (action, payload) = payload.into_payload();
-                    target.push_vrp(action, payload);
+                Ok(Some(pdu)) => {
+                    self.check_version(pdu.version())?;
+                    let (action, payload) = pdu.to_payload();
+                    if let Err(err) = target.push_vrp(action, payload) {
+                        err.send(
+                            self.version(), Some(pdu), &mut self.sock
+                        ).await?;
+                        return Err(io::Error::new(io::ErrorKind::Other, ""));
+                    }
                 }
                 Ok(None) => {
                     // Unsupported but legal payload: ignore.
@@ -308,16 +378,20 @@ where
                 }
             }
         }
-        if let Err(err) = self.target.apply(target, true, self.timing) {
-            // XXX Temporary error message. We need to fix error handling
-            //     properly.
-            pdu::Error::new(
-                self.version.unwrap_or(1),
-                0, "", b"corrupt data"
-            ).write(&mut self.sock).await?;
-            return Err(err)
+        Ok(target)
+    }
+
+    /// Tries to apply an update and sends errors if that fails.
+    async fn apply(
+        &mut self, update: Target::Update, reset: bool
+    ) -> Result<(), io::Error> {
+        if let Err(err) = self.target.apply(update, reset, self.timing) {
+            err.send(self.version(), None, &mut self.sock).await?;
+            Err(io::Error::new(io::ErrorKind::Other, ""))
         }
-        Ok(())
+        else {
+            Ok(())
+        }
     }
 
     /// Performs some IO operation on the socket.
@@ -409,6 +483,59 @@ impl FirstReply {
                     io::ErrorKind::InvalidData,
                     format!("unexpected PDU {}", pdu)
                 ))
+            }
+        }
+    }
+}
+
+
+//------------ VrpError ------------------------------------------------------
+
+/// A received VRP was not acceptable.
+#[derive(Clone, Copy, Debug)]
+pub enum VrpError {
+    /// A nonexisting record was withdrawn.
+    UnknownWithdraw,
+
+    /// An existing record was announced again.
+    DuplicateAnnounce,
+
+    /// The record is corrupt.
+    Corrupt,
+
+    /// An internal error in the receiver happend.
+    Internal,
+}
+
+impl VrpError {
+    fn error_code(self) -> u16 {
+        match self {
+            VrpError::UnknownWithdraw => 6,
+            VrpError::DuplicateAnnounce => 7,
+            VrpError::Corrupt => 0,
+            VrpError::Internal => 1
+        }
+    }
+
+    async fn send(
+        self, version: u8, pdu: Option<pdu::Payload>,
+        sock: &mut (impl AsyncWrite + Unpin)
+    ) -> Result<(), io::Error> {
+        match pdu {
+            Some(pdu::Payload::V4(pdu)) => {
+                pdu::Error::new(
+                    version, self.error_code(), pdu, ""
+                ).write(sock).await
+            }
+            Some(pdu::Payload::V6(pdu)) => {
+                pdu::Error::new(
+                    version, self.error_code(), pdu, ""
+                ).write(sock).await
+            }
+            None => {
+                pdu::Error::new(
+                    version, self.error_code(), "", ""
+                ).write(sock).await
             }
         }
     }
