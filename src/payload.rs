@@ -103,18 +103,12 @@ pub enum Action {
 impl Action {
     /// Returns whether the action is to announce.
     pub fn is_announce(self) -> bool {
-        match self {
-            Action::Announce => true,
-            _ => false,
-        }
+        matches!(self, Action::Announce)
     }
 
     /// Returns whether the action is to withdraw.
     pub fn is_withdraw(self) -> bool {
-        match self {
-            Action::Withdraw=> true,
-            _ => false,
-        }
+        matches!(self, Action::Withdraw)
     }
 
     /// Creates the action from the flags field of an RTR PDU.

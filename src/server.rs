@@ -266,6 +266,10 @@ where Sock: AsyncRead + Unpin {
                     }
                 }
             }
+            pdu::Error::PDU => {
+                debug!("RTR: Got error reply.");
+                Err(io::Error::new(io::ErrorKind::Other, "got error PDU"))
+            }
             pdu => {
                 debug!("RTR: Got query with PDU {}.", pdu);
                 Ok(Some(Query::Error(
@@ -274,7 +278,7 @@ where Sock: AsyncRead + Unpin {
                         3,
                         header,
                         "expected Serial Query or Reset Query"
-                    ).boxed()
+                    )
                 )))
             }
         }
@@ -296,7 +300,7 @@ where Sock: AsyncRead + Unpin {
                         8,
                         header,
                         "version switched during connection"
-                    ).boxed()
+                    )
                 ))
             }
             else {
@@ -310,7 +314,7 @@ where Sock: AsyncRead + Unpin {
                     4,
                     header,
                     "only versions 0 and 1 supported"
-                ).boxed()
+                )
             ))
         }
         else {
@@ -330,7 +334,7 @@ where Sock: AsyncRead + Unpin {
                     3,
                     header,
                     "invalid length"
-                ).boxed()
+                )
             ))
         }
         else {
@@ -356,7 +360,7 @@ where
         debug!("RTR server: request for serial {}", state.serial());
         if !self.source.ready() {
             return pdu::Error::new(
-                self.version(), 2, (), *b"Running initial validation"
+                self.version(), 2, b"", b"Running initial validation"
             ).write(&mut self.sock).await;
         }
         match self.source.diff(state) {
@@ -391,7 +395,7 @@ where
     async fn reset(&mut self) -> Result<(), io::Error> {
         if !self.source.ready() {
             return pdu::Error::new(
-                self.version(), 2, (), *b"Running initial validation"
+                self.version(), 2, "", b"Running initial validation"
             ).write(&mut self.sock).await;
         }
         let (state, iter) = self.source.full();
@@ -411,7 +415,7 @@ where
 
     /// Sends an error response.
     async fn error(
-        &mut self, err: pdu::BoxedError
+        &mut self, err: pdu::Error
     ) -> Result<(), io::Error> {
         err.write(&mut self.sock).await
     }
@@ -439,7 +443,7 @@ enum Query {
     Reset,
 
     /// The client misbehaved resulting in this error to be sent to it.
-    Error(pdu::BoxedError),
+    Error(pdu::Error),
 
     /// The source has new data available.
     Notify

@@ -466,7 +466,7 @@ impl FirstReply {
                     header, sock
                 ).await.map(FirstReply::Reset)
             }
-            pdu::ERROR_PDU => {
+            pdu::Error::PDU => {
                 Err(io::Error::new(
                     io::ErrorKind::Other,
                     format!("server reported error {}", header.session())
