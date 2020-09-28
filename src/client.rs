@@ -260,6 +260,12 @@ where
         }
     }
 
+    /// Performs a single update of the client data.
+    ///
+    /// The method will wait until the next update is due and the request one
+    /// single update from the server. It will request a new update object
+    /// from the target, apply the update to that object and, if the update
+    /// succeeds, return the object.
     pub async fn update(
         &mut self
     ) -> Result<Target::Update, io::Error> {

@@ -7,6 +7,8 @@ Breaking Changes
 * `pdu::Error` has been changed to contain an allocated octets buffer
   instead of being generic in a very fragile way. Consequently,
   `pdu::BoxedError` has been dropped. ([#6])
+* The client traits `VrpTarget` and `VrpUpdate` have been modified to
+  allow returning errors when processing data. ([#7])
 * The minimum supported Rust version is now 1.42. ([#6])
 
 Bug Fixes
@@ -17,15 +19,15 @@ Bug Fixes
 New
 
 * Implemented `Default` for `state::Serial` [(#4])
-* The client will now send a (generic) error PDU if `VrpTarget::apply`
-  returns an error. This is a temporary measure. In a future version we
-  will provide proper ways to signal displeasure with the supplied data
-  both in `VrpTarget` and `VrpUpdate`. ([#6])
+* The client now provides a method `Client::update` that can be used to
+  fetch a single update instead of just letting it run forever. ([#7])
+
 
 Other Changes
 
 [#4]: https://github.com/NLnetLabs/rpki-rtr/pull/4
 [#6]: https://github.com/NLnetLabs/rpki-rtr/pull/6
+[#7]: https://github.com/NLnetLabs/rpki-rtr/pull/7
 
 
 ## 0.1.1
