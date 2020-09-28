@@ -7,6 +7,7 @@ Breaking Changes
 * `pdu::Error` has been changed to contain an allocated octets buffer
   instead of being generic in a very fragile way. Consequently,
   `pdu::BoxedError` has been dropped. ([#6])
+* The minimum supported Rust version is now 1.42. ([#6])
 
 Bug Fixes
 
