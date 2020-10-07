@@ -1,6 +1,6 @@
 # Change Log
 
-## Unreleased next version
+## 0.2.0
 
 Breaking Changes
 
@@ -11,19 +11,16 @@ Breaking Changes
   allow returning errors when processing data. ([#7])
 * The minimum supported Rust version is now 1.42. ([#6])
 
-Bug Fixes
-
-* The server now correctly responds to received error PDUs by returning an
-  error from `server::Connection::run`. ([#6])
-
 New
 
 * Implemented `Default` for `state::Serial` [(#4])
 * The client now provides a method `Client::update` that can be used to
   fetch a single update instead of just letting it run forever. ([#7])
 
+Bug Fixes
 
-Other Changes
+* The server now correctly responds to received error PDUs by returning an
+  error from `server::Connection::run`. ([#6])
 
 [#4]: https://github.com/NLnetLabs/rpki-rtr/pull/4
 [#6]: https://github.com/NLnetLabs/rpki-rtr/pull/6
