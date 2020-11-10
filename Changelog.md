@@ -6,9 +6,13 @@ Breaking Changes
 
 New
 
+* The `pdu` module allowing access to raw RTR PDUs is now public. ([#9])
+
 Bug Fixes
 
 Other Changes
+
+[#9]: https://github.com/NLnetLabs/rpki-rtr/pull/9
 
 
 ## 0.2.0
