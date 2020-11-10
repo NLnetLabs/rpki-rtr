@@ -37,4 +37,4 @@ pub mod payload;
 pub mod state;
 pub mod server;
 
-mod pdu;
+pub mod pdu;
