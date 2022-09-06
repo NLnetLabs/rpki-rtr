@@ -1,18 +1,14 @@
 # Change Log
 
-## Unreleased next version
+## 0.2.1
 
-Breaking Changes
+Released 2022-09-06
 
-New
+This release does not contain any changes. It only adds a deprecation
+warning to the README.
 
-* The `pdu` module allowing access to raw RTR PDUs is now public. ([#9])
-
-Bug Fixes
-
-Other Changes
-
-[#9]: https://github.com/NLnetLabs/rpki-rtr/pull/9
+Please switch to the [rpki](https://crates.io/crates/rpki) crate which
+contains all functionality of this crate.
 
 
 ## 0.2.0
